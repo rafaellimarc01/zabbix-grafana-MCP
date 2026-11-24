@@ -1,0 +1,143 @@
+name: security
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  schedule:
+    # Toda segunda às 06:17 UTC: pega CVEs novos nas imagens mesmo sem commit.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+# Token do GitHub só com leitura; nenhum job precisa escrever no repositório.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Binários baixados das releases oficiais e conferidos por SHA-256 (linux amd64).
+env:
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+  TRIVY_VERSION: 0.76.2
+  TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+  ZIZMOR_VERSION: 1.33.1
+
+jobs:
+  # Procura senhas e chaves em todo o histórico do git, não só nos arquivos atuais.
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Instala o gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
+
+      # Exceções aceitas ficam em .gitleaksignore.
+      - name: Segredos no histórico
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --no-banner --exit-code 1 .'
+
+  # Erros e riscos de segurança nos próprios workflows do GitHub Actions.
+  workflows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: actionlint
+        run: |
+          curl -sSfL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar xzf actionlint.tar.gz -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+
+      - name: zizmor
+        run: |
+          pip install --quiet "zizmor==${ZIZMOR_VERSION}"
+          zizmor --offline --format github .github/workflows
+
+  # Configurações inseguras nos manifests do Kubernetes, já renderizados pelo Kustomize.
+  kubernetes-config:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Instala o Trivy
+        run: &install-trivy |
+          curl -sSfL -o trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  trivy.tar.gz" | sha256sum -c -
+          tar xzf trivy.tar.gz -C "$RUNNER_TEMP" trivy
+
+      - name: Renderiza os overlays
+        run: |
+          ./scripts/generate-secrets.sh k8s
+          mkdir -p rendered
+          for o in local ingress; do
+            kubectl kustomize "kubernetes/overlays/$o" > "rendered/$o.yaml"
+          done
+
+      # Exceções aceitas, cada uma presa a um recurso: .github/trivy-ignore.rego
+      - name: Trivy config (HIGH e CRITICAL)
+        run: |
+          "$RUNNER_TEMP/trivy" config --quiet --exit-code 1 \
+            --severity HIGH,CRITICAL \
+            --ignore-policy .github/trivy-ignore.rego \
+            rendered
+
+  # CVEs nas imagens usadas. Só avisa: a correção depende do Zabbix, do Grafana
+  # e do PostgreSQL publicarem imagens novas, e isso não deve travar os PRs.
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Instala o Trivy
+        run: *install-trivy
+
+      - name: Trivy image (HIGH e CRITICAL com correção disponível)
+        run: |
+          # Lê nome e tag do bloco "images:" do kustomization.yaml
+          images=$(awk '/^images:/{f=1;next} f&&/^[^ ]/{f=0} f&&/- name:/{n=$3} f&&/newTag:/{print n":"$2}' \
+            kubernetes/base/kustomization.yaml)
+          test -n "$images"
+          {
+            echo "## Vulnerabilidades nas imagens"
+            echo
+            echo "| Imagem | CRITICAL | HIGH |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for img in $images; do
+            echo "::group::$img"
+            "$RUNNER_TEMP/trivy" image --quiet --scanners vuln --ignore-unfixed \
+              --severity HIGH,CRITICAL --format json --output result.json "$img"
+            "$RUNNER_TEMP/trivy" convert --format table result.json
+            echo "::endgroup::"
+            crit=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' result.json)
+            high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' result.json)
+            echo "| \`$img\` | $crit | $high |" >> "$GITHUB_STEP_SUMMARY"
+            if [ $((crit + high)) -gt 0 ]; then
+              echo "::warning title=CVE em $img::$crit CRITICAL e $high HIGH com correção disponível. Veja se há tag nova da imagem."
+            fi
+          done

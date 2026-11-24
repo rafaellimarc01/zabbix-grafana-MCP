@@ -15,6 +15,7 @@ Use como ponto de partida para o seu laboratório, para estudos ou como base de 
 | Zabbix Web | `zabbix/zabbix-web-nginx-pgsql:alpine-7.0.32` | Interface web e API do Zabbix |
 | Zabbix Agent 2 | `zabbix/zabbix-agent2:alpine-7.0.32` | Monitora o host "Zabbix server" que já vem cadastrado |
 | zabbix-init | `zabbix/zabbix-web-nginx-pgsql:alpine-7.0.32` | Tarefa única: troca a senha padrão do Admin, cria o usuário somente leitura do Grafana e liga o agente ao host |
+| postgres-backup | `postgres:16-alpine` | Backup automático diário do banco do Zabbix (`pg_dump`), com retenção de 7 dias |
 | Grafana | `grafana/grafana:12.4.16` | Dashboards, com o plugin [Zabbix para Grafana](https://grafana.com/grafana/plugins/alexanderzobnin-zabbix-app/) |
 
 Dashboards incluídos (pasta **Zabbix** no Grafana):
@@ -31,11 +32,13 @@ Dashboards incluídos (pasta **Zabbix** no Grafana):
 │   └── dashboards/             # JSON dos dashboards (adicione os seus aqui)
 ├── kubernetes/
 │   ├── base/                   # manifests (Kustomize)
+│   ├── tools/                  # pod temporário para copiar/restaurar backups
 │   └── overlays/
 │       ├── local/              # NodePort, para kind/minikube/k3d/Docker Desktop
 │       └── ingress/            # Ingress com domínios próprios
 ├── scripts/
 │   ├── zabbix-init.sh          # configuração inicial via API do Zabbix
+│   ├── postgres-backup.sh      # backup automático e restauração do banco
 │   ├── generate-secrets.sh     # gera .env / secrets.env com senhas aleatórias
 │   ├── check-secrets.sh        # recusa senhas vazias, curtas ou de exemplo
 │   └── sync-k8s-files.sh       # copia grafana/ para o Kubernetes
@@ -80,6 +83,7 @@ Depois de 1 a 2 minutos:
 ```bash
 make help     # lista os atalhos
 make logs     # acompanha os logs
+make backup   # faz um backup do banco agora (veja "Backup do banco")
 make down     # para tudo, mantendo os dados
 make reset    # para e APAGA os volumes (começa do zero)
 ```
@@ -141,6 +145,90 @@ Observações:
 - O Kustomize não lê arquivos fora da própria pasta, então `kubernetes/base/files/` tem uma cópia de `grafana/` e do script de init. Depois de mudar algo neles, rode `./scripts/sync-k8s-files.sh` (o CI acusa se esquecer).
 - Para remover: `kubectl delete -k kubernetes/overlays/local`. Os PVCs do PostgreSQL ficam; apague-os à mão se quiser zerar os dados.
 
+## Backup do banco
+
+O banco do Zabbix (hosts, templates, histórico, usuários) tem backup automático com `pg_dump` nos dois modos de instalação. Os arquivos ficam no formato custom do PostgreSQL (`zabbix-AAAAMMDD-HHMMSS.dump`, já comprimido) e cada backup é conferido com `pg_restore --list` antes de ser guardado. Os mais antigos que a retenção são apagados, mas só depois de um backup novo dar certo, então o último sempre fica.
+
+O Grafana não entra no backup: a fonte de dados e os dashboards vêm dos arquivos de `grafana/`, que já estão no Git. Se você criar dashboards pela interface, exporte o JSON para `grafana/dashboards/`.
+
+> O backup fica no mesmo servidor (ou cluster) do banco. Para se proteger de perder a máquina, copie os arquivos para fora dela de vez em quando (veja abaixo).
+
+### Docker Compose
+
+O serviço `postgres-backup` sobe junto com o resto. Ele faz um backup logo ao iniciar (se não houver um das últimas 24 h) e depois todo dia às `BACKUP_TIME`, guardando `BACKUP_KEEP_DAYS` dias no volume `postgres-backups`. Os dois ficam no `.env` (padrão: `02:00` e `7`). O serviço aparece como `healthy` enquanto houver um backup das últimas 25 h.
+
+Os comandos abaixo funcionam iguais no Linux, no macOS e no Windows (PowerShell ou CMD):
+
+```bash
+# Backup agora (sem make: docker compose exec postgres-backup sh /postgres-backup.sh once)
+make backup
+
+# Lista os backups (sem make: docker compose exec postgres-backup sh /postgres-backup.sh list)
+make backup-list
+
+# Copia todos os backups para a pasta ./backups do seu computador
+docker compose cp postgres-backup:/var/lib/postgresql/backups ./backups
+
+# Acompanha o que o serviço fez
+docker compose logs postgres-backup
+```
+
+**Restaurar** (substitui todos os dados atuais do Zabbix pelos do backup):
+
+```bash
+# 1. Pare quem usa o banco
+docker compose stop zabbix-server zabbix-web grafana
+
+# 2. Restaure um backup do volume (o nome sai do "make backup-list")
+docker compose exec postgres-backup sh /postgres-backup.sh restore zabbix-20260101-020000.dump
+
+# 3. Suba tudo de novo
+docker compose up -d
+```
+
+Para restaurar um arquivo que está no seu computador (por exemplo, vindo de outra máquina), copie-o para o volume e rode a restauração com `-u 0`, porque o arquivo copiado chega com outro dono:
+
+```bash
+docker compose cp zabbix-20260101-020000.dump postgres-backup:/var/lib/postgresql/backups/
+docker compose exec -u 0 postgres-backup sh /postgres-backup.sh restore zabbix-20260101-020000.dump
+```
+
+As senhas do banco não mudam com a restauração. Para restaurar em outra instalação, ela precisa estar na mesma versão do Zabbix (ou mais nova: o Zabbix atualiza o banco sozinho ao iniciar).
+
+### Kubernetes
+
+O CronJob `postgres-backup` roda todo dia às 02:00 (`timeZone` em `kubernetes/base/postgres-backup.yaml`) e guarda 7 dias (`BACKUP_KEEP_DAYS`) no PVC `postgres-backups`, de 10 Gi. A NetworkPolicy do PostgreSQL só libera os pods com o rótulo `app.kubernetes.io/name: postgres-backup`.
+
+```bash
+# Backup agora
+kubectl -n monitoring create job --from=cronjob/postgres-backup backup-manual
+kubectl -n monitoring logs -f job/backup-manual
+
+# Últimas execuções
+kubectl -n monitoring get jobs -l app.kubernetes.io/name=postgres-backup
+```
+
+Para listar, copiar ou restaurar, crie o pod temporário `postgres-backup-shell`, que monta o PVC dos backups e se encerra sozinho em 1 hora. Como o PVC é `ReadWriteOnce`, evite fazer isso no horário do backup.
+
+```bash
+kubectl -n monitoring apply -f kubernetes/tools/postgres-backup-shell.yaml
+kubectl -n monitoring wait --for=condition=Ready pod/postgres-backup-shell
+
+# Listar e copiar para o seu computador
+kubectl -n monitoring exec postgres-backup-shell -- ls -lh /backups
+kubectl -n monitoring cp postgres-backup-shell:/backups/zabbix-20260101-020000.dump ./zabbix-20260101-020000.dump
+
+# Restaurar (para quem usa o banco antes e volta depois)
+kubectl -n monitoring scale deploy zabbix-server zabbix-web grafana --replicas=0
+kubectl -n monitoring exec postgres-backup-shell -- pg_restore --clean --if-exists --no-owner \
+  --single-transaction --exit-on-error -d zabbix /backups/zabbix-20260101-020000.dump
+kubectl -n monitoring scale deploy zabbix-server zabbix-web grafana --replicas=1
+
+kubectl -n monitoring delete pod postgres-backup-shell
+```
+
+Para restaurar um arquivo do seu computador, envie-o antes com `kubectl -n monitoring cp ./arquivo.dump postgres-backup-shell:/backups/arquivo.dump`.
+
 ## Monitorando seus servidores
 
 Instale o Zabbix Agent 2 nas máquinas que quer monitorar e aponte para o servidor:
@@ -165,7 +253,7 @@ Para monitorar o próprio cluster Kubernetes (nós, pods, API), use a [integraç
 
 ## Segurança
 
-O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem capabilities, banco isolado, Grafana lendo o Zabbix com um usuário somente leitura, NetworkPolicies e HTTPS no overlay `ingress`. A lista completa, e o que continua sendo responsabilidade sua (HTTPS, firewall do trapper, backups), está no [SECURITY.md](SECURITY.md).
+O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem capabilities, banco isolado, Grafana lendo o Zabbix com um usuário somente leitura, NetworkPolicies e HTTPS no overlay `ingress`. A lista completa, e o que continua sendo responsabilidade sua (HTTPS, firewall do trapper, cópia dos backups para fora do servidor), está no [SECURITY.md](SECURITY.md).
 
 - Nunca envie o `.env` ou o `secrets.env` para o GitHub (ambos estão no `.gitignore`).
 - O Grafana acessa o Zabbix com o usuário `grafana`, que só lê dados e não entra na interface web. Ele recebe leitura nos grupos de hosts que existem quando o `zabbix-init` roda; ao criar grupos novos, rode `docker compose up zabbix-init` (ou `kubectl apply -k` de novo).
@@ -184,11 +272,14 @@ O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem ca
 | `make up` diz que a senha é de exemplo ou curta | Apague o `.env` e rode `make env` de novo (ou ajuste a senha à mão) |
 | No Mac, `mounts denied` ou `path is not shared` ao subir | A pasta do repositório está fora de `/Users`; mova-a ou libere em **Docker Desktop → Settings → Resources → File sharing** |
 | `make: command not found` no Mac | Rode `xcode-select --install` (ou use `./scripts/generate-secrets.sh` e `docker compose up -d`) |
+| `postgres-backup` aparece como `unhealthy` | Nenhum backup nas últimas 25 h; veja `docker compose logs postgres-backup` (disco cheio ou senha do banco errada) |
 | Não consigo abrir o Zabbix/Grafana de outra máquina | Por padrão eles só escutam em `127.0.0.1`; veja `BIND_ADDRESS` no `.env` |
 
 ## Contribuindo
 
 Issues e pull requests são bem-vindos. Antes de abrir um PR, rode `make validate` (precisa de `docker`, `kubectl` e `yamllint`).
+
+Abra o PR para a branch `develop`, nunca para a `main`. A `main` só recebe a `develop` (o CI recusa PR de outra branch para a `main`), e as duas branches são protegidas: nada de push direto, e o merge só sai com o CI verde.
 
 ## Licença
 

@@ -49,6 +49,17 @@ aos respectivos projetos.
   Dependabot, binários baixados conferidos por SHA-256.
 - O CI falha se os arquivos de exemplo trouxerem senhas ou se algum arquivo de
   segredo for versionado.
+- Workflow `security` (em todo PR, push e toda segunda-feira):
+  - **gitleaks** procura senhas e chaves em todo o histórico do git. Exceções
+    aceitas ficam em `.gitleaksignore`.
+  - **actionlint** e **zizmor** checam erros e riscos nos próprios workflows.
+  - **Trivy config** analisa os manifests do Kubernetes já renderizados e falha
+    em achados HIGH/CRITICAL. Exceções, cada uma presa a um recurso e com o
+    motivo, ficam em `.github/trivy-ignore.rego`.
+  - **Trivy image** lista CVEs HIGH/CRITICAL com correção disponível nas imagens
+    do Zabbix, Grafana e PostgreSQL. Só avisa (resumo no job), porque a correção
+    depende de uma imagem nova do projeto original: quando aparecer, atualize a
+    tag (veja "Atualizações").
 
 ## O que fica com você
 
@@ -65,7 +76,10 @@ aos respectivos projetos.
 - **Kubernetes Secrets** ficam só em base64 no etcd. Em produção, ative a
   [criptografia em repouso](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/)
   ou use Sealed Secrets / External Secrets.
-- **Backups** do volume do PostgreSQL.
+- **Cópia dos backups para fora do servidor.** O backup automático do banco
+  (`postgres-backup`) guarda os arquivos no mesmo host ou cluster. Copie-os
+  para outro lugar (veja "Backup do banco" no README). Os arquivos têm todos os
+  dados do Zabbix, inclusive os hashes de senha: guarde-os protegidos.
 - **Novos grupos de hosts.** O usuário `grafana` recebe leitura nos grupos que
   existem quando o init roda. Ao criar grupos novos, rode o init de novo
   (`docker compose up zabbix-init`, ou `kubectl apply -k` no Kubernetes) ou

@@ -1,0 +1,97 @@
+# Backup automático do banco do Zabbix: pg_dump todo dia às 02:00 (fuso em
+# spec.timeZone), guardando 7 dias (BACKUP_KEEP_DAYS) no PVC postgres-backups.
+# Usa a mesma imagem do banco (pg_dump da mesma versão) e roda sem root.
+# Backup na hora: kubectl -n monitoring create job --from=cronjob/postgres-backup backup-manual
+# Listar, copiar e restaurar: kubernetes/tools/postgres-backup-shell.yaml (veja o README).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backups
+  labels:
+    app.kubernetes.io/name: postgres-backup
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  labels:
+    app.kubernetes.io/name: postgres-backup
+spec:
+  schedule: "0 2 * * *"
+  timeZone: America/Sao_Paulo
+  concurrencyPolicy: Forbid
+  # Se o cluster estiver fora do ar às 02:00, ainda roda até 6 h depois.
+  startingDeadlineSeconds: 21600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 7200
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: postgres-backup
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: postgres-backup
+              image: postgres
+              command: ["/bin/sh", "/scripts/postgres-backup.sh", "once"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: PGHOST
+                  valueFrom:
+                    configMapKeyRef: {name: zabbix-config, key: DB_SERVER_HOST}
+                - name: PGDATABASE
+                  valueFrom:
+                    configMapKeyRef: {name: zabbix-config, key: POSTGRES_DB}
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef: {name: zabbix-secrets, key: POSTGRES_USER}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: {name: zabbix-secrets, key: POSTGRES_PASSWORD}
+                - name: TZ
+                  valueFrom:
+                    configMapKeyRef: {name: zabbix-config, key: TZ}
+                - name: BACKUP_DIR
+                  value: /backups
+                - name: BACKUP_KEEP_DAYS
+                  value: "7"
+              resources:
+                requests: {cpu: 50m, memory: 64Mi}
+                limits: {memory: 512Mi}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: script
+                  mountPath: /scripts
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: postgres-backups
+            - name: script
+              configMap:
+                name: postgres-backup-script
+            - name: tmp
+              emptyDir: {}

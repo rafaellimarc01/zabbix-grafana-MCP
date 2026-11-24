@@ -1,7 +1,8 @@
 #!/bin/sh
 # O Kustomize não lê arquivos fora da pasta dele, então o Kubernetes usa uma
-# cópia dos arquivos do Grafana e do script de init. Rode este script sempre
-# que alterar algo em grafana/ ou scripts/zabbix-init.sh.
+# cópia dos arquivos do Grafana e dos scripts de init e de backup. Rode este
+# script sempre que alterar algo em grafana/, scripts/zabbix-init.sh ou
+# scripts/postgres-backup.sh.
 #   ./scripts/sync-k8s-files.sh          -> copia
 #   ./scripts/sync-k8s-files.sh --check  -> só verifica (usado no CI)
 set -eu
@@ -11,7 +12,8 @@ DEST=kubernetes/base/files
 # Não pode ir para o Kubernetes nem fazer o --check acusar diferença.
 
 if [ "${1:-}" = "--check" ]; then
-  if diff -r -x .DS_Store -x '._*' grafana "$DEST/grafana" && diff scripts/zabbix-init.sh "$DEST/zabbix-init.sh"; then
+  if diff -r -x .DS_Store -x '._*' grafana "$DEST/grafana" && diff scripts/zabbix-init.sh "$DEST/zabbix-init.sh" \
+    && diff scripts/postgres-backup.sh "$DEST/postgres-backup.sh"; then
     echo "kubernetes/base/files está sincronizado"
     exit 0
   fi
@@ -23,5 +25,6 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 cp -r grafana "$DEST/grafana"
 cp scripts/zabbix-init.sh "$DEST/zabbix-init.sh"
+cp scripts/postgres-backup.sh "$DEST/postgres-backup.sh"
 find "$DEST" -type f \( -name .DS_Store -o -name '._*' \) -exec rm -f {} +
 echo "arquivos copiados para $DEST"

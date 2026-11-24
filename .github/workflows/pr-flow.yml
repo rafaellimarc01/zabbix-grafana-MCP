@@ -1,0 +1,27 @@
+name: pr-flow
+
+# Garante o fluxo de branches: feature -> develop -> main.
+# A main só recebe PR vindo da develop (deste mesmo repositório).
+# Este check é obrigatório no ruleset da main.
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  pr-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: PR para main só a partir da develop
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "PR de ${HEAD_REPO}:${HEAD} para ${BASE}"
+          if [ "$BASE" = main ] && { [ "$HEAD" != develop ] || [ "$HEAD_REPO" != "$REPO" ]; }; then
+            echo "::error::PRs para a main só podem vir da develop. Abra o PR para a develop."
+            exit 1
+          fi

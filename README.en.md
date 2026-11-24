@@ -33,6 +33,10 @@ kubectl apply -k kubernetes/overlays/ingress   # HTTPS; edit hosts in ingress.ya
 
 Everything goes into the `monitoring` namespace. `kubernetes/base/files/` holds a copy of `grafana/` and the init script because Kustomize cannot read files outside its folder; run `./scripts/sync-k8s-files.sh` after changing them.
 
+## Database backups
+
+The Zabbix database is backed up automatically with `pg_dump`: the `postgres-backup` Compose service runs at startup and daily at `BACKUP_TIME` (default `02:00`, keeping `BACKUP_KEEP_DAYS=7`) into the `postgres-backups` volume; on Kubernetes a CronJob does the same into the `postgres-backups` PVC. Run `make backup` for an on-demand backup. Restore steps (all platforms) are in the Portuguese README, section "Backup do banco".
+
 ## Security
 
 No default passwords, non-root containers with all capabilities dropped, an isolated database, a read-only Zabbix user for Grafana, NetworkPolicies, Pod Security `baseline`, and TLS in the `ingress` overlay. See [SECURITY.md](SECURITY.md) (Portuguese) for the full list, what is still up to you, and how to report a vulnerability.
