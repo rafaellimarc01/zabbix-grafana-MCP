@@ -1,0 +1,8 @@
+# Força LF em todos os arquivos de texto, inclusive em clones no Windows
+# (core.autocrlf=true). Scripts .sh, .env.example e YAML com CRLF quebram
+# o generate-secrets.sh e os scripts montados nos containers Linux.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
