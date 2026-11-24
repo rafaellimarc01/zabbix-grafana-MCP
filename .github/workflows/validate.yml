@@ -2,25 +2,61 @@ name: validate
 
 on:
   push:
+    branches: [main, develop]
   pull_request:
 
+# Token do GitHub só com leitura; nenhum job precisa escrever no repositório.
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KUBECONFORM_VERSION: v0.7.0
+  KUBECONFORM_SHA256: c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3
+  YAMLLINT_VERSION: 1.38.0
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      # Actions fixadas por SHA do commit (o Dependabot mantém atualizado).
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Exemplos não têm senhas preenchidas
+        run: |
+          if grep -nE '^[A-Z_]*PASSWORD=.+' .env.example kubernetes/base/secrets.env.example; then
+            echo "::error::Os arquivos de exemplo não podem trazer senhas. Deixe as variáveis *_PASSWORD vazias."
+            exit 1
+          fi
+
+      - name: Nenhum segredo real versionado
+        run: |
+          if git ls-files | grep -E '(^|/)\.env$|(^|/)secrets\.env$|\.(pem|key)$'; then
+            echo "::error::Arquivo de segredo versionado"
+            exit 1
+          fi
+
+      - name: Gera segredos de teste
+        run: |
+          ./scripts/generate-secrets.sh compose
+          ./scripts/generate-secrets.sh k8s
+          ./scripts/check-secrets.sh .env
+          ./scripts/check-secrets.sh kubernetes/base/secrets.env
 
       - name: Docker Compose config
-        run: docker compose --env-file .env.example config -q
+        run: docker compose config -q
 
       - name: Arquivos do Kubernetes sincronizados
         run: ./scripts/sync-k8s-files.sh --check
 
       - name: YAML lint
-        run: pip install --quiet yamllint && yamllint -s .
+        run: pip install --quiet "yamllint==${YAMLLINT_VERSION}" && yamllint -s .
 
       - name: Shellcheck
         run: shellcheck scripts/*.sh
@@ -30,8 +66,10 @@ jobs:
 
       - name: Kustomize + kubeconform
         run: |
-          cp kubernetes/base/secrets.env.example kubernetes/base/secrets.env
-          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          curl -sSfL -o kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          tar xzf kubeconform.tar.gz kubeconform
           for o in local ingress; do
             kubectl kustomize kubernetes/overlays/$o | ./kubeconform -strict -summary
           done
@@ -39,12 +77,15 @@ jobs:
   smoke-test:
     runs-on: ubuntu-latest
     needs: validate
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Sobe o ambiente
         run: |
-          cp .env.example .env
+          ./scripts/generate-secrets.sh compose
           docker compose up -d --wait --wait-timeout 300 postgres zabbix-server zabbix-web zabbix-agent
           docker compose up zabbix-init --exit-code-from zabbix-init
           docker compose up -d --wait --wait-timeout 180 grafana
@@ -52,11 +93,21 @@ jobs:
       - name: Testa Zabbix e Grafana
         run: |
           set -a; . ./.env; set +a
-          curl -fsS -H 'Content-Type: application/json-rpc' \
-            -d "{\"jsonrpc\":\"2.0\",\"method\":\"user.login\",\"params\":{\"username\":\"Admin\",\"password\":\"$ZABBIX_ADMIN_PASSWORD\"},\"id\":1}" \
-            http://localhost:8080/api_jsonrpc.php | jq -e .result
+          api() { curl -fsS -H 'Content-Type: application/json-rpc' ${3:+-H "Authorization: Bearer $3"} \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":1}" http://localhost:8080/api_jsonrpc.php; }
+          # Admin usa a senha nova; a senha padrão "zabbix" não funciona mais
+          api user.login "{\"username\":\"Admin\",\"password\":\"$ZABBIX_ADMIN_PASSWORD\"}" | jq -e .result
+          api user.login '{"username":"Admin","password":"zabbix"}' | jq -e '.error'
+          # Usuário do Grafana lê dados, mas não pode alterar nada
+          TOKEN=$(api user.login "{\"username\":\"grafana\",\"password\":\"$ZABBIX_GRAFANA_PASSWORD\"}" | jq -r .result)
+          api host.get '{"output":["host"]}' "$TOKEN" | jq -e '.result | length >= 1'
+          api host.create '{"host":"x","groups":[{"groupid":"2"}]}' "$TOKEN" | jq -e '.error'
+          # Grafana: datasource saudável, dashboards carregados, sem acesso anônimo
           curl -fsS -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" http://localhost:3000/api/datasources/uid/zabbix/health | tee /dev/stderr | jq -e '.status == "OK"'
           curl -fsS -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" "http://localhost:3000/api/search?tag=zabbix" | jq -e 'length >= 2'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/api/search)" = 401
+          # PostgreSQL não fica exposto no host
+          ! (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null
 
       - name: Logs em caso de falha
         if: failure()

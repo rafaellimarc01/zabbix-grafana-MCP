@@ -1,5 +1,5 @@
 # Base do ambiente Zabbix + Grafana no Kubernetes.
-# Antes de aplicar: cp secrets.env.example secrets.env  (e troque as senhas)
+# Antes de aplicar, gere os segredos com senhas aleatórias: make k8s-secrets
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -18,6 +18,7 @@ resources:
   - zabbix-agent.yaml
   - zabbix-init-job.yaml
   - grafana.yaml
+  - networkpolicies.yaml
 
 # Versões das imagens (mesmas do .env.example do Docker Compose).
 images:
@@ -31,8 +32,6 @@ images:
     newTag: alpine-7.0.32
   - name: grafana/grafana
     newTag: 12.4.16
-  - name: alpine
-    newTag: "3.22"
 
 configMapGenerator:
   - name: zabbix-config

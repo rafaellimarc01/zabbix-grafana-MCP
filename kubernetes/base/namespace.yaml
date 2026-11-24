@@ -2,3 +2,11 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: monitoring
+  labels:
+    # Pod Security Admission: bloqueia pods privilegiados neste namespace
+    # (perfil "baseline") e avisa sobre o que não segue o perfil "restricted".
+    # Se for instalar no mesmo namespace algo que precise de privilégios
+    # (ex.: o Helm chart do agente Zabbix para Kubernetes), use outro namespace.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

@@ -1,0 +1,80 @@
+# Segurança
+
+## Como reportar uma vulnerabilidade
+
+Não abra uma issue pública. Use a aba **Security → Report a vulnerability**
+deste repositório (GitHub Private Vulnerability Reporting). Responderemos assim
+que possível e combinaremos a divulgação depois da correção.
+
+Vulnerabilidades do próprio Zabbix, Grafana ou PostgreSQL devem ser reportadas
+aos respectivos projetos.
+
+## O que este modelo já faz por padrão
+
+**Senhas**
+- Nenhuma senha vem preenchida. `make env` / `make k8s-secrets` geram senhas
+  aleatórias de 24 caracteres, em arquivos com permissão 600 que estão no
+  `.gitignore`.
+- O Docker Compose não sobe se faltar alguma senha; `make up` e `make k8s-apply`
+  recusam senhas vazias, curtas (menos de 12) ou de exemplo. No Kubernetes, o
+  Grafana também confere as senhas antes de iniciar.
+- A senha padrão `zabbix` do Admin é trocada no primeiro start.
+- O Grafana acessa o Zabbix com um usuário próprio (`grafana`), **somente
+  leitura** e **sem acesso à interface web**, nunca com o Admin.
+
+**Rede**
+- PostgreSQL sem porta publicada e numa rede sem saída para a internet.
+- Docker: Zabbix web e Grafana escutam só em `127.0.0.1` por padrão.
+- Kubernetes: NetworkPolicies negam toda entrada que não seja necessária; o
+  overlay `ingress` já vem com TLS e redirecionamento para HTTPS.
+
+**Containers**
+- Todos rodam sem root (o PostgreSQL inclusive), sem capabilities do Linux e
+  com `no-new-privileges` / `allowPrivilegeEscalation: false`.
+  Exceção: o Zabbix server mantém só `NET_RAW`, para os pings ICMP (fping).
+- Sistema de arquivos somente leitura no PostgreSQL, Grafana e zabbix-init.
+- Kubernetes: `seccompProfile: RuntimeDefault`, sem token de ServiceAccount
+  montado, limites de memória, e o namespace com Pod Security `baseline`
+  (aviso para `restricted`).
+- O job de init não baixa pacotes na hora: usa a imagem do Zabbix web, que já
+  tem `curl` e `jq`.
+
+**Grafana**
+- Sem cadastro de usuários, sem acesso anônimo, sem criação de organizações,
+  sem snapshots externos, sem Gravatar e sem telemetria. Cookie `SameSite=strict`
+  e, atrás de HTTPS (overlay `ingress`), cookie `Secure`.
+
+**CI**
+- Token do GitHub só com leitura, Actions fixadas por SHA e atualizadas pelo
+  Dependabot, binários baixados conferidos por SHA-256.
+- O CI falha se os arquivos de exemplo trouxerem senhas ou se algum arquivo de
+  segredo for versionado.
+
+## O que fica com você
+
+- **HTTPS.** Para acessar o Zabbix e o Grafana de outra máquina, coloque um
+  proxy reverso com TLS na frente (Docker) ou use o overlay `ingress` com um
+  certificado válido (cert-manager, por exemplo). Evite `BIND_ADDRESS=0.0.0.0`
+  sem TLS.
+- **Firewall do trapper (10051).** Ele precisa ficar aberto para os agentes
+  ativos. Libere só as redes dos seus agentes e, de preferência, ative
+  criptografia PSK ou certificado entre agentes e servidor
+  ([documentação](https://www.zabbix.com/documentation/7.0/en/manual/encryption)).
+- **Senhas.** Guarde as senhas geradas num cofre. Trocar `POSTGRES_PASSWORD`
+  depois do primeiro start não muda a senha do banco já criado.
+- **Kubernetes Secrets** ficam só em base64 no etcd. Em produção, ative a
+  [criptografia em repouso](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/)
+  ou use Sealed Secrets / External Secrets.
+- **Backups** do volume do PostgreSQL.
+- **Novos grupos de hosts.** O usuário `grafana` recebe leitura nos grupos que
+  existem quando o init roda. Ao criar grupos novos, rode o init de novo
+  (`docker compose up zabbix-init`, ou `kubectl apply -k` no Kubernetes) ou
+  adicione o grupo ao grupo de usuários "Grafana (somente leitura)".
+
+## Atualizações
+
+Siga os avisos de segurança do [Zabbix](https://www.zabbix.com/security_advisories),
+do [Grafana](https://grafana.com/security/security-advisories/) e do PostgreSQL.
+As versões das imagens ficam em `.env.example` (Docker) e no bloco `images:` de
+`kubernetes/base/kustomization.yaml` (Kubernetes). O PostgreSQL usa a tag
+`16-alpine`, que recebe as correções da versão 16 a cada `docker compose pull`.

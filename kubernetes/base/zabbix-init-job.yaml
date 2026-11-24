@@ -1,5 +1,7 @@
-# Troca a senha padrão do Admin e aponta o host "Zabbix server" para o agente.
-# É idempotente. O Job se apaga 10 min após terminar; reaplicar roda de novo.
+# Troca a senha padrão do Admin, cria o usuário somente leitura do Grafana e
+# aponta o host "Zabbix server" para o agente. É idempotente.
+# Usa a imagem do zabbix-web, que já traz curl e jq: roda sem root e sem
+# baixar nada na hora. O Job se apaga 10 min após terminar; reaplicar roda de novo.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -15,10 +17,25 @@ spec:
         app.kubernetes.io/name: zabbix-init
     spec:
       restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1997
+        runAsGroup: 1995
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: zabbix-init
-          image: alpine
-          command: ["/bin/sh", "-c", "apk add --no-cache curl jq >/dev/null && sh /scripts/zabbix-init.sh"]
+          image: zabbix/zabbix-web-nginx-pgsql
+          command: ["/bin/sh", "/scripts/zabbix-init.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
           env:
             - name: ZABBIX_URL
               value: http://zabbix-web:8080
@@ -27,6 +44,11 @@ spec:
             - name: ZABBIX_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef: {name: zabbix-secrets, key: ZABBIX_ADMIN_PASSWORD}
+            - name: ZABBIX_GRAFANA_USER
+              value: grafana
+            - name: ZABBIX_GRAFANA_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_GRAFANA_PASSWORD}
           volumeMounts:
             - name: script
               mountPath: /scripts

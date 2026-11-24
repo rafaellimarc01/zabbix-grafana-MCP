@@ -1,6 +1,13 @@
 # Segredos locais - nunca versionar
 .env
+.env.*
+!.env.example
+*.env
+!kubernetes/base/secrets.env.example
 kubernetes/base/secrets.env
+*.pem
+*.key
+*.crt
 
 # Sistema / editores
 .DS_Store

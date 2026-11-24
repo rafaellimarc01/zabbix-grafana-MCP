@@ -30,9 +30,22 @@ spec:
       labels:
         app.kubernetes.io/name: zabbix-server
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1997
+        runAsGroup: 1995
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: zabbix-server
           image: zabbix/zabbix-server-pgsql
+          # O fping (itens de ping ICMP) é setuid e usa NET_RAW. O perfil
+          # "baseline" não deixa adicionar NET_RAW, então derrubamos todas as
+          # outras capabilities padrão e mantemos só ela.
+          securityContext:
+            capabilities:
+              drop: [AUDIT_WRITE, CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, MKNOD, NET_BIND_SERVICE, SETFCAP, SETGID, SETPCAP, SETUID, SYS_CHROOT]
           ports:
             - name: trapper
               containerPort: 10051
