@@ -1,0 +1,10 @@
+# Achados aceitos do gitleaks (formato: commit:arquivo:regra:linha).
+# Senhas de exemplo ("TroqueEstaSenha-...") do primeiro commit, f345b47.
+# Nunca foram senhas reais e já saíram dos arquivos de exemplo; o CI hoje
+# exige que as variáveis *_PASSWORD fiquem vazias nesses arquivos.
+f345b47ba558cd07c9b829fa214e35281ca6ca42:kubernetes/base/secrets.env.example:generic-api-key:4
+f345b47ba558cd07c9b829fa214e35281ca6ca42:kubernetes/base/secrets.env.example:generic-api-key:5
+f345b47ba558cd07c9b829fa214e35281ca6ca42:kubernetes/base/secrets.env.example:generic-api-key:7
+f345b47ba558cd07c9b829fa214e35281ca6ca42:.env.example:generic-api-key:20
+f345b47ba558cd07c9b829fa214e35281ca6ca42:.env.example:generic-api-key:25
+f345b47ba558cd07c9b829fa214e35281ca6ca42:.env.example:generic-api-key:29
