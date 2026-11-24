@@ -1,0 +1,61 @@
+# Pod temporário para listar, copiar e restaurar os backups do PVC
+# postgres-backups. Não faz parte do Kustomize: crie só quando precisar e ele
+# se encerra sozinho em 1 hora. Passo a passo em "Backup do banco" no README.
+#   kubectl -n monitoring apply -f kubernetes/tools/postgres-backup-shell.yaml
+#   kubectl -n monitoring exec postgres-backup-shell -- ls -lh /backups
+#   kubectl -n monitoring delete pod postgres-backup-shell
+apiVersion: v1
+kind: Pod
+metadata:
+  name: postgres-backup-shell
+  namespace: monitoring
+  labels:
+    # Mesmo rótulo do CronJob: a NetworkPolicy do PostgreSQL libera este pod.
+    app.kubernetes.io/name: postgres-backup
+    app.kubernetes.io/part-of: zabbix-grafana
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 3600
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    fsGroup: 70
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: shell
+      # Use a mesma versão do banco (kubernetes/base/kustomization.yaml).
+      image: postgres:16-alpine
+      command: ["sleep", "3600"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      env:
+        - name: PGHOST
+          value: postgres
+        - name: PGDATABASE
+          value: zabbix
+        - name: PGUSER
+          valueFrom:
+            secretKeyRef: {name: zabbix-secrets, key: POSTGRES_USER}
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef: {name: zabbix-secrets, key: POSTGRES_PASSWORD}
+      resources:
+        requests: {cpu: 50m, memory: 64Mi}
+        limits: {memory: 512Mi}
+      volumeMounts:
+        - name: backups
+          mountPath: /backups
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: backups
+      persistentVolumeClaim:
+        claimName: postgres-backups
+    - name: tmp
+      emptyDir: {}

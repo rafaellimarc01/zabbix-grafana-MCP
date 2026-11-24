@@ -76,7 +76,10 @@ aos respectivos projetos.
 - **Kubernetes Secrets** ficam só em base64 no etcd. Em produção, ative a
   [criptografia em repouso](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/)
   ou use Sealed Secrets / External Secrets.
-- **Backups** do volume do PostgreSQL.
+- **Cópia dos backups para fora do servidor.** O backup automático do banco
+  (`postgres-backup`) guarda os arquivos no mesmo host ou cluster. Copie-os
+  para outro lugar (veja "Backup do banco" no README). Os arquivos têm todos os
+  dados do Zabbix, inclusive os hashes de senha: guarde-os protegidos.
 - **Novos grupos de hosts.** O usuário `grafana` recebe leitura nos grupos que
   existem quando o init roda. Ao criar grupos novos, rode o init de novo
   (`docker compose up zabbix-init`, ou `kubectl apply -k` no Kubernetes) ou

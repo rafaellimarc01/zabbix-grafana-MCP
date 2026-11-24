@@ -13,6 +13,7 @@ labels:
 resources:
   - namespace.yaml
   - postgres.yaml
+  - postgres-backup.yaml
   - zabbix-server.yaml
   - zabbix-web.yaml
   - zabbix-agent.yaml
@@ -42,6 +43,9 @@ configMapGenerator:
   - name: zabbix-init-script
     files:
       - files/zabbix-init.sh
+  - name: postgres-backup-script
+    files:
+      - files/postgres-backup.sh
   - name: grafana-datasources
     files:
       - files/grafana/provisioning/datasources/zabbix.yaml
