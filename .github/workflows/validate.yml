@@ -52,6 +52,8 @@ jobs:
       - name: Testa Zabbix e Grafana
         run: |
           set -a; . ./.env; set +a
+          # espera o Grafana terminar as migrações e a instalação do plugin
+          for i in $(seq 1 30); do curl -fsS http://localhost:3000/api/health && break; sleep 5; done
           curl -fsS -H 'Content-Type: application/json-rpc' \
             -d "{\"jsonrpc\":\"2.0\",\"method\":\"user.login\",\"params\":{\"username\":\"Admin\",\"password\":\"$ZABBIX_ADMIN_PASSWORD\"},\"id\":1}" \
             http://localhost:8080/api_jsonrpc.php | jq -e .result
