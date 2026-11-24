@@ -1,0 +1,36 @@
+# Para testes locais (kind, minikube, k3d, Docker Desktop):
+# expõe os serviços em NodePorts.
+#   Zabbix web  -> http://<ip-do-nó>:30080
+#   Grafana     -> http://<ip-do-nó>:30300
+#   Zabbix trapper (agentes externos) -> <ip-do-nó>:30051
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - target: {kind: Service, name: zabbix-web}
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30080
+  - target: {kind: Service, name: grafana}
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30300
+  - target: {kind: Service, name: zabbix-server}
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30051

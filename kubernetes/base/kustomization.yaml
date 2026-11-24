@@ -1,0 +1,63 @@
+# Base do ambiente Zabbix + Grafana no Kubernetes.
+# Antes de aplicar: cp secrets.env.example secrets.env  (e troque as senhas)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: zabbix-grafana
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - zabbix-server.yaml
+  - zabbix-web.yaml
+  - zabbix-agent.yaml
+  - zabbix-init-job.yaml
+  - grafana.yaml
+
+# Versões das imagens (mesmas do .env.example do Docker Compose).
+images:
+  - name: postgres
+    newTag: 16-alpine
+  - name: zabbix/zabbix-server-pgsql
+    newTag: alpine-7.0.32
+  - name: zabbix/zabbix-web-nginx-pgsql
+    newTag: alpine-7.0.32
+  - name: zabbix/zabbix-agent2
+    newTag: alpine-7.0.32
+  - name: grafana/grafana
+    newTag: 12.4.16
+  - name: alpine
+    newTag: "3.22"
+
+configMapGenerator:
+  - name: zabbix-config
+    literals:
+      - TZ=America/Sao_Paulo
+      - POSTGRES_DB=zabbix
+      - DB_SERVER_HOST=postgres
+  - name: zabbix-init-script
+    files:
+      - files/zabbix-init.sh
+  - name: grafana-datasources
+    files:
+      - files/grafana/provisioning/datasources/zabbix.yaml
+  - name: grafana-plugins
+    files:
+      - files/grafana/provisioning/plugins/zabbix-app.yaml
+  - name: grafana-dashboard-providers
+    files:
+      - files/grafana/provisioning/dashboards/dashboards.yaml
+  - name: grafana-dashboards
+    files:
+      - files/grafana/dashboards/zabbix-overview.json
+      - files/grafana/dashboards/zabbix-server-health.json
+
+secretGenerator:
+  - name: zabbix-secrets
+    envs:
+      - secrets.env

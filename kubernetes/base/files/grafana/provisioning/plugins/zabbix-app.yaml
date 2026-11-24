@@ -1,0 +1,7 @@
+# Habilita o app do plugin Zabbix (necessário para o datasource funcionar).
+apiVersion: 1
+
+apps:
+  - type: alexanderzobnin-zabbix-app
+    org_id: 1
+    disabled: false

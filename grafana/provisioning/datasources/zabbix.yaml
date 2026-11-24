@@ -1,0 +1,22 @@
+# Datasource do Zabbix. Os valores vêm de variáveis de ambiente do container
+# do Grafana (ZABBIX_URL, ZABBIX_USER, ZABBIX_PASSWORD).
+apiVersion: 1
+
+datasources:
+  - name: Zabbix
+    uid: zabbix
+    type: alexanderzobnin-zabbix-datasource
+    access: proxy
+    url: $ZABBIX_URL
+    isDefault: true
+    editable: true
+    jsonData:
+      authType: userLogin
+      username: $ZABBIX_USER
+      trends: true
+      trendsFrom: 7d
+      trendsRange: 4d
+      cacheTTL: 1h
+      timeout: 30
+    secureJsonData:
+      password: $ZABBIX_PASSWORD

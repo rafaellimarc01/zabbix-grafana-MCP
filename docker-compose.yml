@@ -1,0 +1,133 @@
+# Zabbix + Grafana - ambiente pronto com Docker Compose
+# Uso: cp .env.example .env && docker compose up -d
+
+name: zabbix-grafana
+
+x-zabbix-db-env: &zabbix-db-env
+  DB_SERVER_HOST: postgres
+  POSTGRES_DB: ${POSTGRES_DB:-zabbix}
+  POSTGRES_USER: ${POSTGRES_USER:-zabbix}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zabbix}
+      POSTGRES_USER: ${POSTGRES_USER:-zabbix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      TZ: ${TZ:-America/Sao_Paulo}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:${ZABBIX_VERSION:-alpine-7.0.32}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *zabbix-db-env
+      TZ: ${TZ:-America/Sao_Paulo}
+      ZBX_CACHESIZE: 128M
+      ZBX_STARTPOLLERS: 10
+    ports:
+      - "${ZABBIX_SERVER_PORT:-10051}:10051"
+    volumes:
+      - zabbix-server-data:/var/lib/zabbix
+    networks: [backend, frontend]
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:${ZABBIX_VERSION:-alpine-7.0.32}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+    environment:
+      <<: *zabbix-db-env
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_SERVER_NAME: Zabbix
+      PHP_TZ: ${TZ:-America/Sao_Paulo}
+    ports:
+      - "${ZABBIX_WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ping >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks: [backend, frontend]
+
+  # Agente que monitora o próprio host "Zabbix server" (vem cadastrado por padrão).
+  zabbix-agent:
+    image: zabbix/zabbix-agent2:${ZABBIX_VERSION:-alpine-7.0.32}
+    restart: unless-stopped
+    depends_on:
+      - zabbix-server
+    hostname: zabbix-agent
+    environment:
+      ZBX_HOSTNAME: Zabbix server
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_ACTIVE_ALLOW: "true"
+      TZ: ${TZ:-America/Sao_Paulo}
+    networks: [backend]
+
+  # Tarefa única: troca a senha padrão do Admin e aponta o host "Zabbix server"
+  # para o container do agente. É idempotente; pode rodar quantas vezes quiser.
+  zabbix-init:
+    image: alpine:3.22
+    restart: "no"
+    depends_on:
+      zabbix-web:
+        condition: service_healthy
+    environment:
+      ZABBIX_URL: http://zabbix-web:8080
+      ZABBIX_ADMIN_PASSWORD: ${ZABBIX_ADMIN_PASSWORD:?defina ZABBIX_ADMIN_PASSWORD no .env}
+      ZABBIX_AGENT_DNS: zabbix-agent
+    volumes:
+      - ./scripts/zabbix-init.sh:/zabbix-init.sh:ro
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl jq >/dev/null && sh /zabbix-init.sh"]
+    networks: [frontend]
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-12.4.16}
+    restart: unless-stopped
+    depends_on:
+      zabbix-init:
+        condition: service_completed_successfully
+    environment:
+      TZ: ${TZ:-America/Sao_Paulo}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
+      GF_PLUGINS_PREINSTALL_SYNC: alexanderzobnin-zabbix-app
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/zabbix-overview.json
+      ZABBIX_URL: http://zabbix-web:8080/api_jsonrpc.php
+      ZABBIX_USER: Admin
+      ZABBIX_PASSWORD: ${ZABBIX_ADMIN_PASSWORD}
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks: [frontend]
+
+volumes:
+  postgres-data:
+  zabbix-server-data:
+  grafana-data:
+
+networks:
+  backend:
+  frontend:

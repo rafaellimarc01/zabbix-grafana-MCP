@@ -1,0 +1,36 @@
+# Troca a senha padrão do Admin e aponta o host "Zabbix server" para o agente.
+# É idempotente. O Job se apaga 10 min após terminar; reaplicar roda de novo.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zabbix-init
+  labels:
+    app.kubernetes.io/name: zabbix-init
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zabbix-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: zabbix-init
+          image: alpine
+          command: ["/bin/sh", "-c", "apk add --no-cache curl jq >/dev/null && sh /scripts/zabbix-init.sh"]
+          env:
+            - name: ZABBIX_URL
+              value: http://zabbix-web:8080
+            - name: ZABBIX_AGENT_DNS
+              value: zabbix-agent
+            - name: ZABBIX_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_ADMIN_PASSWORD}
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: zabbix-init-script

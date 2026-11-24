@@ -1,0 +1,9 @@
+# Segredos locais - nunca versionar
+.env
+kubernetes/base/secrets.env
+
+# Sistema / editores
+.DS_Store
+.idea/
+.vscode/
+*.swp
