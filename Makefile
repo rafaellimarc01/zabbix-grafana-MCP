@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 K8S_OVERLAY ?= local
 
-.PHONY: help env check-env up down logs ps reset k8s-secrets k8s-render k8s-apply k8s-delete sync-k8s validate
+.PHONY: help env check-env up down logs ps reset backup backup-list k8s-secrets k8s-render k8s-apply k8s-delete sync-k8s validate
 
 help: ## Mostra esta ajuda
 	@# Regex sem "*?" (não guloso), que o grep/awk do macOS (BSD) não aceitam.
@@ -25,6 +25,12 @@ logs: ## Acompanha os logs
 
 ps: ## Status dos containers
 	docker compose ps -a
+
+backup: ## Faz um backup do banco agora (além do automático diário)
+	docker compose exec postgres-backup sh /postgres-backup.sh once
+
+backup-list: ## Lista os backups do banco
+	docker compose exec postgres-backup sh /postgres-backup.sh list
 
 reset: ## APAGA tudo, inclusive volumes/dados
 	docker compose down -v
