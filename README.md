@@ -190,6 +190,8 @@ O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem ca
 
 Issues e pull requests são bem-vindos. Antes de abrir um PR, rode `make validate` (precisa de `docker`, `kubectl` e `yamllint`).
 
+Abra o PR para a branch `develop`, nunca para a `main`. A `main` só recebe a `develop` (o CI recusa PR de outra branch para a `main`), e as duas branches são protegidas: nada de push direto, e o merge só sai com o CI verde.
+
 ## Licença
 
 [MIT](LICENSE)
