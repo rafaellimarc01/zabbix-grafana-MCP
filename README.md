@@ -45,7 +45,7 @@ Dashboards incluídos (pasta **Zabbix** no Grafana):
 
 ## Requisitos
 
-- **Docker:** Docker Engine 24+ com o plugin `docker compose` (ou Docker Desktop).
+- **Docker:** Docker Engine 24+ com o plugin `docker compose` (ou Docker Desktop). No Mac, veja [Usando no macOS](#usando-no-macos-intel-e-apple-silicon).
 - **Kubernetes:** um cluster 1.27+ com StorageClass padrão e `kubectl` 1.27+ (já traz o Kustomize).
 - Mínimo recomendado: 2 vCPU e 4 GB de RAM.
 - Acesso à internet no primeiro start (o Grafana baixa o plugin do Zabbix de grafana.com).
@@ -83,6 +83,22 @@ make logs     # acompanha os logs
 make down     # para tudo, mantendo os dados
 make reset    # para e APAGA os volumes (começa do zero)
 ```
+
+## Usando no macOS (Intel e Apple Silicon)
+
+O modelo funciona igual no Mac. Todas as imagens (Zabbix, Grafana e PostgreSQL) têm versão nativa para `arm64`, então nos Macs M1/M2/M3/M4 nada roda emulado.
+
+1. Instale o [Docker Desktop para Mac](https://docs.docker.com/desktop/setup/install/mac-install/) (ou [OrbStack](https://orbstack.dev) / [Colima](https://github.com/abiosoft/colima)). Em **Settings → Resources**, deixe pelo menos 4 GB de memória para o Docker.
+2. Instale o `make` e o `git` com as ferramentas de linha de comando da Apple: `xcode-select --install`. Os scripts usam só comandos que já vêm no macOS (testado no CI em `macos-latest`).
+3. Clone o repositório **dentro da sua pasta de usuário** (ex.: `~/projetos`). O Docker Desktop só compartilha `/Users`, `/Volumes`, `/private` e `/tmp` com os containers; fora disso o Grafana e o `zabbix-init` falham com `mounts denied`. Para usar outra pasta, adicione-a em **Settings → Resources → File sharing**.
+4. Siga o [início rápido](#início-rápido-com-docker-compose) normalmente: `make up`.
+
+Bom saber:
+
+- O container `zabbix-agent` monitora a máquina virtual Linux do Docker Desktop, não o seu Mac. Para monitorar o Mac, instale o [Zabbix Agent para macOS](https://www.zabbix.com/download_agents) com `Server=127.0.0.1,172.16.0.0/12`, `ServerActive=127.0.0.1:10051` e cadastre o host no Zabbix com a interface `host.docker.internal`, porta `10050`, e o template **macOS by Zabbix agent**.
+- O Finder cria arquivos `.DS_Store` nas pastas. Eles já estão no `.gitignore` e o `sync-k8s-files.sh` ignora todos eles.
+- Para o Kubernetes, o cluster do Docker Desktop (**Settings → Kubernetes**) serve: com o overlay `local`, os NodePorts ficam em `http://localhost:30080` e `http://localhost:30300`. Ele não aplica NetworkPolicies, então use só para testes.
+- Para rodar o `make validate`: `brew install shellcheck yamllint kubectl`.
 
 ## Início rápido com Kubernetes
 
@@ -166,6 +182,8 @@ O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem ca
 | Painéis do Grafana sem dados | Confira em **Connections → Data sources → Zabbix → Save & test** |
 | Hosts de um grupo novo não aparecem no Grafana | Rode `docker compose up zabbix-init` para dar leitura ao usuário `grafana` no grupo novo |
 | `make up` diz que a senha é de exemplo ou curta | Apague o `.env` e rode `make env` de novo (ou ajuste a senha à mão) |
+| No Mac, `mounts denied` ou `path is not shared` ao subir | A pasta do repositório está fora de `/Users`; mova-a ou libere em **Docker Desktop → Settings → Resources → File sharing** |
+| `make: command not found` no Mac | Rode `xcode-select --install` (ou use `./scripts/generate-secrets.sh` e `docker compose up -d`) |
 | Não consigo abrir o Zabbix/Grafana de outra máquina | Por padrão eles só escutam em `127.0.0.1`; veja `BIND_ADDRESS` no `.env` |
 
 ## Contribuindo

@@ -18,6 +18,10 @@ The web UIs listen on `127.0.0.1` only, since they speak plain HTTP. To reach th
 
 A one-shot `zabbix-init` container replaces the default Admin password, creates a read-only, API-only `grafana` user that Grafana uses to query Zabbix, and points the built-in "Zabbix server" host to the agent container.
 
+### macOS
+
+Works on Intel and Apple Silicon Macs: every image has a native `arm64` build. Install Docker Desktop (give it 4 GB+ RAM), run `xcode-select --install` for `make` and `git`, and clone the repo under your home folder (Docker Desktop only shares `/Users`, `/Volumes`, `/private` and `/tmp`; anything else fails with `mounts denied`). The bundled `zabbix-agent` monitors Docker Desktop's Linux VM, not the Mac itself. The scripts only use tools that ship with macOS and are tested on `macos-latest` in CI.
+
 ## Kubernetes
 
 ```bash
