@@ -28,9 +28,21 @@ spec:
       labels:
         app.kubernetes.io/name: zabbix-web
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1997
+        runAsGroup: 1995
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: zabbix-web
           image: zabbix/zabbix-web-nginx-pgsql
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080

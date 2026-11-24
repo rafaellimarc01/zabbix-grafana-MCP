@@ -1,18 +1,33 @@
 #!/bin/sh
 # Configuração inicial do Zabbix via API (idempotente).
 #  1. Troca a senha padrão do usuário Admin ("zabbix") por ZABBIX_ADMIN_PASSWORD.
-#  2. Aponta a interface do host "Zabbix server" para o DNS do agente
+#  2. Cria/atualiza o usuário "grafana": só leitura, só API (sem acesso à
+#     interface web), usado pelo datasource do Grafana no lugar do Admin.
+#  3. Aponta a interface do host "Zabbix server" para o DNS do agente
 #     (por padrão ela vem como 127.0.0.1, que não funciona em containers).
-# Requer: curl e jq.
+# Requer: curl e jq (já vêm na imagem zabbix-web-nginx-pgsql).
 set -eu
 
 ZABBIX_URL="${ZABBIX_URL:-http://zabbix-web:8080}"
 API="${ZABBIX_URL%/}/api_jsonrpc.php"
 NEW_PASSWORD="${ZABBIX_ADMIN_PASSWORD:?ZABBIX_ADMIN_PASSWORD não definido}"
+GRAFANA_USER="${ZABBIX_GRAFANA_USER:-grafana}"
+GRAFANA_PASSWORD="${ZABBIX_GRAFANA_PASSWORD:?ZABBIX_GRAFANA_PASSWORD não definido}"
+GRAFANA_GROUP="Grafana (somente leitura)"
 AGENT_DNS="${ZABBIX_AGENT_DNS:-zabbix-agent}"
 DEFAULT_PASSWORD="zabbix"
 
 log() { echo "[zabbix-init] $*"; }
+
+# Recusa senhas fracas antes de tocar no Zabbix.
+if [ "${#NEW_PASSWORD}" -lt 8 ] || echo "$NEW_PASSWORD" | grep -qiE 'admin|zabbix'; then
+  log "ZABBIX_ADMIN_PASSWORD precisa ter 8+ caracteres e não pode conter 'Admin' nem 'Zabbix'"
+  exit 1
+fi
+if [ "${#GRAFANA_PASSWORD}" -lt 8 ]; then
+  log "ZABBIX_GRAFANA_PASSWORD precisa ter 8+ caracteres"
+  exit 1
+fi
 
 # call <método> <params-json> [token]
 call() {
@@ -32,8 +47,9 @@ check() {
   fi
 }
 
+# login <senha> [usuário]
 login() {
-  call user.login "$(jq -nc --arg p "$1" '{username:"Admin",password:$p}')" | jq -r '.result // empty'
+  call user.login "$(jq -nc --arg u "${2:-Admin}" --arg p "$1" '{username:$u,password:$p}')" | jq -r '.result // empty'
 }
 
 log "aguardando a API em $API ..."
@@ -77,6 +93,46 @@ else
   log "senha do Admin já configurada"
 fi
 
+# ---- Usuário somente leitura para o Grafana ---------------------------------
+# Grupo de usuários sem acesso à interface web (gui_access=3), com permissão de
+# leitura em todos os grupos de hosts que existem agora. Rodar o init de novo
+# inclui grupos de hosts criados depois.
+RIGHTS=$(call hostgroup.get '{"output":["groupid"]}' "$TOKEN" | jq -c '[.result[] | {id: .groupid, permission: 2}]')
+GROUPID=$(call usergroup.get "$(jq -nc --arg n "$GRAFANA_GROUP" '{filter:{name:$n},output:["usrgrpid"]}')" "$TOKEN" | jq -r '.result[0].usrgrpid // empty')
+if [ -z "$GROUPID" ]; then
+  RESP=$(call usergroup.create "$(jq -nc --arg n "$GRAFANA_GROUP" --argjson r "$RIGHTS" '{name:$n,gui_access:3,hostgroup_rights:$r}')" "$TOKEN")
+  check "$RESP" "criar o grupo de usuários '$GRAFANA_GROUP'"
+  GROUPID=$(echo "$RESP" | jq -r '.result.usrgrpids[0]')
+  log "grupo '$GRAFANA_GROUP' criado"
+else
+  RESP=$(call usergroup.update "$(jq -nc --arg id "$GROUPID" --argjson r "$RIGHTS" '{usrgrpid:$id,gui_access:3,hostgroup_rights:$r}')" "$TOKEN")
+  check "$RESP" "atualizar o grupo de usuários '$GRAFANA_GROUP'"
+fi
+
+ROLEID=$(call role.get '{"filter":{"name":"User role"},"output":["roleid"]}' "$TOKEN" | jq -r '.result[0].roleid // empty')
+[ -n "$ROLEID" ] || { log "perfil 'User role' não encontrado"; exit 1; }
+
+GUSERID=$(call user.get "$(jq -nc --arg u "$GRAFANA_USER" '{filter:{username:$u},output:["userid"]}')" "$TOKEN" | jq -r '.result[0].userid // empty')
+if [ -z "$GUSERID" ]; then
+  RESP=$(call user.create "$(jq -nc --arg u "$GRAFANA_USER" --arg p "$GRAFANA_PASSWORD" --arg r "$ROLEID" --arg g "$GROUPID" \
+    '{username:$u,passwd:$p,roleid:$r,usrgrps:[{usrgrpid:$g}]}')" "$TOKEN")
+  check "$RESP" "criar o usuário '$GRAFANA_USER'"
+  log "usuário '$GRAFANA_USER' (somente leitura) criado"
+else
+  # Só troca a senha se a atual não funcionar (evita derrubar sessões à toa).
+  GTOKEN=$(login "$GRAFANA_PASSWORD" "$GRAFANA_USER" 2>/dev/null || true)
+  if [ -n "$GTOKEN" ]; then
+    call user.logout '{}' "$GTOKEN" >/dev/null 2>&1 || true
+    PARAMS=$(jq -nc --arg id "$GUSERID" --arg r "$ROLEID" --arg g "$GROUPID" '{userid:$id,roleid:$r,usrgrps:[{usrgrpid:$g}]}')
+  else
+    PARAMS=$(jq -nc --arg id "$GUSERID" --arg p "$GRAFANA_PASSWORD" --arg r "$ROLEID" --arg g "$GROUPID" '{userid:$id,passwd:$p,roleid:$r,usrgrps:[{usrgrpid:$g}]}')
+    log "senha do usuário '$GRAFANA_USER' atualizada"
+  fi
+  RESP=$(call user.update "$PARAMS" "$TOKEN")
+  check "$RESP" "atualizar o usuário '$GRAFANA_USER'"
+fi
+
+# ---- Interface do host "Zabbix server" --------------------------------------
 IFACE=$(call host.get '{"filter":{"host":["Zabbix server"]},"selectInterfaces":["interfaceid","type","useip","dns"],"output":["hostid"]}' "$TOKEN" \
   | jq -c '.result[0].interfaces[]? | select(.type=="1")')
 if [ -n "$IFACE" ]; then

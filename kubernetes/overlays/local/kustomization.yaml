@@ -1,5 +1,6 @@
 # Para testes locais (kind, minikube, k3d, Docker Desktop):
-# expõe os serviços em NodePorts.
+# expõe os serviços em NodePorts, em HTTP sem TLS e em todos os nós.
+# Não use em clusters acessíveis pela rede; prefira o overlay "ingress".
 #   Zabbix web  -> http://<ip-do-nó>:30080
 #   Grafana     -> http://<ip-do-nó>:30300
 #   Zabbix trapper (agentes externos) -> <ip-do-nó>:30051
