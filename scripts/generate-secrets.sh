@@ -22,7 +22,10 @@ fi
 # Evita "admin" e "zabbix", que o Zabbix proíbe na senha do Admin.
 random_password() {
   while :; do
-    p=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)
+    # Lê uma quantidade fixa de /dev/urandom. Com "tr < /dev/urandom" a leitura
+    # é infinita e, onde o SIGPIPE é ignorado (ex.: runner macOS do GitHub
+    # Actions), o tr do macOS nunca termina depois que o head fecha o pipe.
+    p=$(head -c 512 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | head -c 24)
     if [ "${#p}" -eq 24 ] && ! echo "$p" | grep -qiE 'admin|zabbix'; then
       echo "$p"
       return
