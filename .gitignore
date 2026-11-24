@@ -14,3 +14,5 @@ kubernetes/base/secrets.env
 .idea/
 .vscode/
 *.swp
+.DS_Store
+._*

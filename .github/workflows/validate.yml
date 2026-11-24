@@ -74,6 +74,55 @@ jobs:
             kubectl kustomize kubernetes/overlays/$o | ./kubeconform -strict -summary
           done
 
+  # Os scripts e o Makefile rodam no Mac do usuário, que tem ferramentas BSD
+  # (sed, grep, awk, tr, stat), bash 3.2 como /bin/sh e GNU make 3.81.
+  # Os runners macOS do GitHub não têm Docker, então aqui só testamos isso.
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Versões das ferramentas do sistema
+        run: |
+          sw_vers
+          uname -m
+          /bin/sh --version | head -1
+          /usr/bin/make --version | head -1
+
+      - name: make help e make env com o make do sistema (3.81)
+        run: |
+          /usr/bin/make help | tee help.txt
+          grep -q 'check-env' help.txt
+          /usr/bin/make env
+          /usr/bin/make env | grep -q 'já existe'
+          /usr/bin/make check-env
+
+      - name: Gera e confere os segredos com as ferramentas BSD
+        run: |
+          ./scripts/generate-secrets.sh k8s
+          ./scripts/check-secrets.sh kubernetes/base/secrets.env
+          for f in .env kubernetes/base/secrets.env; do
+            test "$(stat -f %Lp "$f")" = 600
+            # Toda senha tem 24 caracteres alfanuméricos
+            if grep -E '^[A-Z_]*PASSWORD=' "$f" | cut -d= -f2 | grep -vqE '^[A-Za-z0-9]{24}$'; then
+              echo "::error::$f tem senha fora do formato"; exit 1
+            fi
+          done
+          # Arquivo de exemplo (senhas vazias) precisa ser recusado
+          if ./scripts/check-secrets.sh .env.example; then exit 1; fi
+
+      - name: Sincronização do Kubernetes ignora .DS_Store
+        run: |
+          ./scripts/sync-k8s-files.sh --check
+          touch grafana/.DS_Store grafana/dashboards/._painel.json
+          ./scripts/sync-k8s-files.sh --check
+          ./scripts/sync-k8s-files.sh
+          test -z "$(find kubernetes/base/files -name .DS_Store -o -name '._*')"
+          git diff --exit-code kubernetes/base/files
+
   smoke-test:
     runs-on: ubuntu-latest
     needs: validate

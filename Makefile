@@ -5,7 +5,8 @@ K8S_OVERLAY ?= local
 .PHONY: help env check-env up down logs ps reset k8s-secrets k8s-render k8s-apply k8s-delete sync-k8s validate
 
 help: ## Mostra esta ajuda
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+	@# Regex sem "*?" (não guloso), que o grep/awk do macOS (BSD) não aceitam.
+	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":[^#]*## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 env: ## Gera o .env com senhas aleatórias (não sobrescreve)
 	@./scripts/generate-secrets.sh compose
