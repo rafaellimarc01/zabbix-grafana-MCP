@@ -49,6 +49,17 @@ aos respectivos projetos.
   Dependabot, binários baixados conferidos por SHA-256.
 - O CI falha se os arquivos de exemplo trouxerem senhas ou se algum arquivo de
   segredo for versionado.
+- Workflow `security` (em todo PR, push e toda segunda-feira):
+  - **gitleaks** procura senhas e chaves em todo o histórico do git. Exceções
+    aceitas ficam em `.gitleaksignore`.
+  - **actionlint** e **zizmor** checam erros e riscos nos próprios workflows.
+  - **Trivy config** analisa os manifests do Kubernetes já renderizados e falha
+    em achados HIGH/CRITICAL. Exceções, cada uma presa a um recurso e com o
+    motivo, ficam em `.github/trivy-ignore.rego`.
+  - **Trivy image** lista CVEs HIGH/CRITICAL com correção disponível nas imagens
+    do Zabbix, Grafana e PostgreSQL. Só avisa (resumo no job), porque a correção
+    depende de uma imagem nova do projeto original: quando aparecer, atualize a
+    tag (veja "Atualizações").
 
 ## O que fica com você
 
