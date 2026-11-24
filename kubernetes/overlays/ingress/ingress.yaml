@@ -3,14 +3,21 @@ kind: Ingress
 metadata:
   name: zabbix-grafana
   annotations:
-    # Descomente se usar cert-manager para gerar certificados TLS:
+    # Com cert-manager instalado, descomente para gerar o certificado sozinho:
     # cert-manager.io/cluster-issuer: letsencrypt
+    # Sem cert-manager, crie o Secret com o seu certificado:
+    #   kubectl -n monitoring create secret tls zabbix-grafana-tls --cert=tls.crt --key=tls.key
+    # Enquanto o Secret não existir, o ingress-nginx usa um certificado
+    # autoassinado próprio (o navegador vai avisar).
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: 16m
 spec:
   ingressClassName: nginx
-  # tls:
-  #   - hosts: [zabbix.example.com, grafana.example.com]
-  #     secretName: zabbix-grafana-tls
+  # HTTPS ligado por padrão: as senhas do Zabbix e do Grafana não trafegam
+  # sem criptografia. Troque os domínios aqui e nas regras abaixo.
+  tls:
+    - hosts: [zabbix.example.com, grafana.example.com]
+      secretName: zabbix-grafana-tls
   rules:
     - host: zabbix.example.com
       http:

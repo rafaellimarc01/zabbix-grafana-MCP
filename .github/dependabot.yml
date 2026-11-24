@@ -1,0 +1,13 @@
+# Mantém as GitHub Actions (fixadas por SHA) atualizadas.
+# As imagens Docker ficam em .env.example e kubernetes/base/kustomization.yaml,
+# formatos que o Dependabot não lê: veja "Atualizações" no SECURITY.md.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

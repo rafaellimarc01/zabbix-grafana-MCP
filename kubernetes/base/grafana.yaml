@@ -42,11 +42,49 @@ spec:
       labels:
         app.kubernetes.io/name: grafana
     spec:
+      automountServiceAccountToken: false
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 0
         fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      # Recusa subir se as senhas estiverem vazias ou curtas demais.
+      initContainers:
+        - name: check-secrets
+          image: grafana/grafana
+          command:
+            - sh
+            - -c
+            - |
+              ok=1
+              [ ${#GF_SECURITY_ADMIN_PASSWORD} -ge 12 ] || { echo "GRAFANA_ADMIN_PASSWORD vazia ou com menos de 12 caracteres"; ok=0; }
+              [ ${#ZABBIX_PASSWORD} -ge 12 ] || { echo "ZABBIX_GRAFANA_PASSWORD vazia ou com menos de 12 caracteres"; ok=0; }
+              [ $ok = 1 ] || { echo "Gere o secrets.env com: make k8s-secrets"; exit 1; }
+          env:
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_ADMIN_PASSWORD}
+            - name: ZABBIX_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_GRAFANA_PASSWORD}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
       containers:
         - name: grafana
           image: grafana/grafana
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 3000
@@ -62,19 +100,37 @@ spec:
                 secretKeyRef: {name: zabbix-secrets, key: GRAFANA_ADMIN_PASSWORD}
             - name: GF_PLUGINS_PREINSTALL_SYNC
               value: alexanderzobnin-zabbix-app
+            # Endurecimento do Grafana
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
+            - name: GF_USERS_ALLOW_ORG_CREATE
+              value: "false"
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+            - name: GF_SECURITY_DISABLE_GRAVATAR
+              value: "true"
+            - name: GF_SECURITY_COOKIE_SAMESITE
+              value: strict
+            - name: GF_SNAPSHOTS_EXTERNAL_ENABLED
+              value: "false"
             - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES
+              value: "false"
+            - name: GF_NEWS_NEWS_FEED_ENABLED
               value: "false"
             - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
               value: /var/lib/grafana/dashboards/zabbix-overview.json
             - name: ZABBIX_URL
               value: http://zabbix-web:8080/api_jsonrpc.php
+            # Usuário somente leitura criado pelo Job zabbix-init.
             - name: ZABBIX_USER
-              value: Admin
+              value: grafana
             - name: ZABBIX_PASSWORD
               valueFrom:
-                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_ADMIN_PASSWORD}
+                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_GRAFANA_PASSWORD}
           readinessProbe:
             httpGet:
               path: /api/health
@@ -101,7 +157,11 @@ spec:
               mountPath: /etc/grafana/provisioning/dashboards
             - name: dashboards
               mountPath: /var/lib/grafana/dashboards
+            - name: tmp
+              mountPath: /tmp
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: data
           persistentVolumeClaim:
             claimName: grafana-data

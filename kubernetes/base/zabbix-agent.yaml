@@ -30,9 +30,21 @@ spec:
       labels:
         app.kubernetes.io/name: zabbix-agent
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1997
+        runAsGroup: 1995
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: zabbix-agent
           image: zabbix/zabbix-agent2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: agent
               containerPort: 10050

@@ -14,7 +14,7 @@ Use como ponto de partida para o seu laboratório, para estudos ou como base de 
 | Zabbix Server | `zabbix/zabbix-server-pgsql:alpine-7.0.32` | Coleta, triggers e alertas (Zabbix 7.0 LTS) |
 | Zabbix Web | `zabbix/zabbix-web-nginx-pgsql:alpine-7.0.32` | Interface web e API do Zabbix |
 | Zabbix Agent 2 | `zabbix/zabbix-agent2:alpine-7.0.32` | Monitora o host "Zabbix server" que já vem cadastrado |
-| zabbix-init | `alpine:3.22` | Tarefa única: troca a senha padrão do Admin e liga o agente ao host |
+| zabbix-init | `zabbix/zabbix-web-nginx-pgsql:alpine-7.0.32` | Tarefa única: troca a senha padrão do Admin, cria o usuário somente leitura do Grafana e liga o agente ao host |
 | Grafana | `grafana/grafana:12.4.16` | Dashboards, com o plugin [Zabbix para Grafana](https://grafana.com/grafana/plugins/alexanderzobnin-zabbix-app/) |
 
 Dashboards incluídos (pasta **Zabbix** no Grafana):
@@ -25,7 +25,7 @@ Dashboards incluídos (pasta **Zabbix** no Grafana):
 ```
 .
 ├── docker-compose.yml          # ambiente completo com Docker
-├── .env.example                # variáveis e senhas (copie para .env)
+├── .env.example                # variáveis (as senhas são geradas por make env)
 ├── grafana/
 │   ├── provisioning/           # plugin, datasource e provedor de dashboards
 │   └── dashboards/             # JSON dos dashboards (adicione os seus aqui)
@@ -36,7 +36,10 @@ Dashboards incluídos (pasta **Zabbix** no Grafana):
 │       └── ingress/            # Ingress com domínios próprios
 ├── scripts/
 │   ├── zabbix-init.sh          # configuração inicial via API do Zabbix
+│   ├── generate-secrets.sh     # gera .env / secrets.env com senhas aleatórias
+│   ├── check-secrets.sh        # recusa senhas vazias, curtas ou de exemplo
 │   └── sync-k8s-files.sh       # copia grafana/ para o Kubernetes
+├── SECURITY.md                 # o que já vem protegido e o que fica com você
 └── Makefile                    # atalhos (make help)
 ```
 
@@ -53,14 +56,12 @@ Dashboards incluídos (pasta **Zabbix** no Grafana):
 git clone https://github.com/<seu-usuario>/zabbix-grafana-stack.git
 cd zabbix-grafana-stack
 
-cp .env.example .env
-# edite o .env e TROQUE AS SENHAS
-
+make env                  # gera o .env com senhas aleatórias (sem make: ./scripts/generate-secrets.sh)
 docker compose up -d
 docker compose ps -a      # zabbix-init deve aparecer como "Exited (0)"
 ```
 
-Ou, com o Makefile: `make up`.
+Ou tudo de uma vez: `make up` (gera o `.env` se não existir e confere as senhas). As senhas ficam no `.env`; guarde-as num cofre.
 
 Depois de 1 a 2 minutos:
 
@@ -70,7 +71,9 @@ Depois de 1 a 2 minutos:
 | Grafana | http://localhost:3000 | `GRAFANA_ADMIN_USER` | `GRAFANA_ADMIN_PASSWORD` do `.env` |
 | Zabbix trapper (agentes externos) | `<ip-do-host>:10051` | | |
 
-> A senha do Admin do Zabbix precisa ter 8 ou mais caracteres e **não pode conter** "Admin" nem "Zabbix" (regra do próprio Zabbix). Se o `zabbix-init` falhar, veja `docker compose logs zabbix-init`.
+> Por segurança, o Zabbix web e o Grafana só aceitam conexões do próprio computador (`127.0.0.1`), porque falam HTTP sem criptografia. Para acessar de outra máquina, coloque um proxy reverso com HTTPS na frente ou mude `BIND_ADDRESS=0.0.0.0` no `.env`, ciente de que as senhas vão trafegar sem TLS.
+
+> Se preencher as senhas à mão: mínimo de 12 caracteres, e a do Admin do Zabbix **não pode conter** "Admin" nem "Zabbix" (regra do próprio Zabbix). Se o `zabbix-init` falhar, veja `docker compose logs zabbix-init`.
 
 ### Comandos úteis
 
@@ -86,8 +89,7 @@ make reset    # para e APAGA os volumes (começa do zero)
 Tudo é criado no namespace `monitoring`.
 
 ```bash
-cp kubernetes/base/secrets.env.example kubernetes/base/secrets.env
-# edite secrets.env e TROQUE AS SENHAS
+make k8s-secrets          # gera kubernetes/base/secrets.env com senhas aleatórias
 
 # Cluster local (kind, minikube, k3d, Docker Desktop): expõe NodePorts
 kubectl apply -k kubernetes/overlays/local
@@ -99,7 +101,7 @@ kubectl apply -k kubernetes/overlays/ingress
 kubectl -n monitoring get pods -w
 ```
 
-Overlay `local`:
+Overlay `local` (só para laboratório: publica HTTP sem TLS em todos os nós):
 
 | Serviço | Endereço |
 |---|---|
@@ -116,6 +118,8 @@ kubectl -n monitoring port-forward svc/grafana 3000:3000
 
 Observações:
 
+- O overlay `ingress` já vem com HTTPS (`tls` + redirecionamento). Crie o Secret `zabbix-grafana-tls` com o seu certificado ou use o cert-manager (veja os comentários em `ingress.yaml`).
+- O namespace usa Pod Security `baseline` e NetworkPolicies que só liberam o tráfego necessário (precisam de um CNI com suporte, como Calico ou Cilium).
 - O PostgreSQL usa um volume de 10 Gi e o Grafana um de 2 Gi, na StorageClass padrão do cluster.
 - O Job `zabbix-init` se apaga 10 minutos depois de terminar. Rodar `kubectl apply -k` de novo executa ele outra vez sem problemas (é idempotente).
 - O Kustomize não lê arquivos fora da própria pasta, então `kubernetes/base/files/` tem uma cópia de `grafana/` e do script de init. Depois de mudar algo neles, rode `./scripts/sync-k8s-files.sh` (o CI acusa se esquecer).
@@ -145,10 +149,12 @@ Para monitorar o próprio cluster Kubernetes (nós, pods, API), use a [integraç
 
 ## Segurança
 
+O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem capabilities, banco isolado, Grafana lendo o Zabbix com um usuário somente leitura, NetworkPolicies e HTTPS no overlay `ingress`. A lista completa, e o que continua sendo responsabilidade sua (HTTPS, firewall do trapper, backups), está no [SECURITY.md](SECURITY.md).
+
 - Nunca envie o `.env` ou o `secrets.env` para o GitHub (ambos estão no `.gitignore`).
-- Troque **todas** as senhas de exemplo antes de usar fora do seu computador.
+- O Grafana acessa o Zabbix com o usuário `grafana`, que só lê dados e não entra na interface web. Ele recebe leitura nos grupos de hosts que existem quando o `zabbix-init` roda; ao criar grupos novos, rode `docker compose up zabbix-init` (ou `kubectl apply -k` de novo).
 - Mudar `POSTGRES_PASSWORD` depois do primeiro start não altera a senha do banco já criado. Nesse caso, troque a senha dentro do PostgreSQL ou recrie os volumes (`make reset`).
-- Em produção, coloque o Zabbix e o Grafana atrás de HTTPS (overlay `ingress` com cert-manager, ou um proxy reverso no Docker).
+- Para reportar uma vulnerabilidade, veja o [SECURITY.md](SECURITY.md).
 
 ## Problemas comuns
 
@@ -158,6 +164,9 @@ Para monitorar o próprio cluster Kubernetes (nós, pods, API), use a [integraç
 | Grafana não sobe e o log fala de `plugin not installed` | O container não conseguiu baixar o plugin de grafana.com (proxy ou firewall) |
 | Host "Zabbix server" fica vermelho (ZBX) por alguns minutos | Normal no primeiro start; o Zabbix tenta de novo a cada minuto |
 | Painéis do Grafana sem dados | Confira em **Connections → Data sources → Zabbix → Save & test** |
+| Hosts de um grupo novo não aparecem no Grafana | Rode `docker compose up zabbix-init` para dar leitura ao usuário `grafana` no grupo novo |
+| `make up` diz que a senha é de exemplo ou curta | Apague o `.env` e rode `make env` de novo (ou ajuste a senha à mão) |
+| Não consigo abrir o Zabbix/Grafana de outra máquina | Por padrão eles só escutam em `127.0.0.1`; veja `BIND_ADDRESS` no `.env` |
 
 ## Contribuindo
 

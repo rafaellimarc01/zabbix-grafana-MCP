@@ -1,0 +1,100 @@
+# NetworkPolicies: por padrão nenhum pod do namespace recebe conexões; cada
+# regra abaixo libera só o necessário. Só têm efeito se o CNI do cluster
+# suportar NetworkPolicy (Calico, Cilium, Antrea, k3s/kube-router, etc.).
+# A saída (egress) fica liberada, porque o Zabbix server precisa alcançar os
+# hosts monitorados e o Grafana baixa o plugin de grafana.com; só o
+# PostgreSQL tem a saída bloqueada.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# PostgreSQL: só o Zabbix server e o Zabbix web; sem nenhuma saída.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: zabbix-server
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: zabbix-web
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+# Zabbix server (trapper 10051): agentes ativos e proxies de qualquer origem,
+# além do Zabbix web dentro do namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zabbix-server
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zabbix-server
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 10051
+          protocol: TCP
+---
+# Zabbix web (8080): usuários (via Ingress/NodePort), Grafana e zabbix-init.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zabbix-web
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zabbix-web
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+---
+# Grafana (3000): usuários (via Ingress/NodePort).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grafana
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 3000
+          protocol: TCP
+---
+# Agente (10050): só o Zabbix server (checks passivos).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zabbix-agent
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: zabbix-agent
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: zabbix-server
+      ports:
+        - port: 10050
+          protocol: TCP

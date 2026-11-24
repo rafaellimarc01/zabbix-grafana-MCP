@@ -1,5 +1,5 @@
 # Zabbix + Grafana - ambiente pronto com Docker Compose
-# Uso: cp .env.example .env && docker compose up -d
+# Uso: make env && docker compose up -d   (make env gera o .env com senhas aleatórias)
 
 name: zabbix-grafana
 
@@ -7,16 +7,37 @@ x-zabbix-db-env: &zabbix-db-env
   DB_SERVER_HOST: postgres
   POSTGRES_DB: ${POSTGRES_DB:-zabbix}
   POSTGRES_USER: ${POSTGRES_USER:-zabbix}
-  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (rode make env)}
+
+# Rotação de logs, para os logs dos containers não encherem o disco.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+# Endurecimento padrão: nenhum privilégio extra e nenhuma capability do Linux.
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
 
 services:
   postgres:
     image: postgres:${POSTGRES_VERSION:-16-alpine}
     restart: unless-stopped
+    <<: *hardening
+    # Roda direto como o usuário "postgres" (uid 70 na imagem alpine), sem root.
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql
+      - /tmp
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-zabbix}
       POSTGRES_USER: ${POSTGRES_USER:-zabbix}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (rode make env)}
       TZ: ${TZ:-America/Sao_Paulo}
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -25,11 +46,19 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    networks: [backend]
+    logging: *logging
+    # Rede interna: sem acesso à internet e sem porta publicada no host.
+    networks: [db]
 
   zabbix-server:
     image: zabbix/zabbix-server-pgsql:${ZABBIX_VERSION:-alpine-7.0.32}
     restart: unless-stopped
+    # O fping (itens de ping ICMP) é setuid e precisa de NET_RAW, por isso
+    # este serviço não usa no-new-privileges. Todas as outras capabilities caem.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,14 +68,17 @@ services:
       ZBX_CACHESIZE: 128M
       ZBX_STARTPOLLERS: 10
     ports:
-      - "${ZABBIX_SERVER_PORT:-10051}:10051"
+      # Trapper: recebe dados dos agentes ativos e proxies.
+      - "${ZABBIX_SERVER_BIND_ADDRESS:-0.0.0.0}:${ZABBIX_SERVER_PORT:-10051}:10051"
     volumes:
       - zabbix-server-data:/var/lib/zabbix
-    networks: [backend, frontend]
+    logging: *logging
+    networks: [db, backend]
 
   zabbix-web:
     image: zabbix/zabbix-web-nginx-pgsql:${ZABBIX_VERSION:-alpine-7.0.32}
     restart: unless-stopped
+    <<: *hardening
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,19 +90,22 @@ services:
       ZBX_SERVER_NAME: Zabbix
       PHP_TZ: ${TZ:-America/Sao_Paulo}
     ports:
-      - "${ZABBIX_WEB_PORT:-8080}:8080"
+      # Só em 127.0.0.1 por padrão (HTTP sem TLS). Veja BIND_ADDRESS no .env.
+      - "${BIND_ADDRESS:-127.0.0.1}:${ZABBIX_WEB_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ping >/dev/null || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 20
       start_period: 30s
-    networks: [backend, frontend]
+    logging: *logging
+    networks: [db, frontend]
 
   # Agente que monitora o próprio host "Zabbix server" (vem cadastrado por padrão).
   zabbix-agent:
     image: zabbix/zabbix-agent2:${ZABBIX_VERSION:-alpine-7.0.32}
     restart: unless-stopped
+    <<: *hardening
     depends_on:
       - zabbix-server
     hostname: zabbix-agent
@@ -79,48 +114,79 @@ services:
       ZBX_SERVER_HOST: zabbix-server
       ZBX_ACTIVE_ALLOW: "true"
       TZ: ${TZ:-America/Sao_Paulo}
+    logging: *logging
     networks: [backend]
 
-  # Tarefa única: troca a senha padrão do Admin e aponta o host "Zabbix server"
-  # para o container do agente. É idempotente; pode rodar quantas vezes quiser.
+  # Tarefa única: troca a senha padrão do Admin, cria o usuário somente leitura
+  # do Grafana e aponta o host "Zabbix server" para o container do agente.
+  # É idempotente; pode rodar quantas vezes quiser (docker compose up zabbix-init).
+  # Usa a imagem do zabbix-web, que já traz curl e jq: nada é baixado na hora
+  # e o container roda sem root.
   zabbix-init:
-    image: alpine:3.22
+    image: zabbix/zabbix-web-nginx-pgsql:${ZABBIX_VERSION:-alpine-7.0.32}
     restart: "no"
+    <<: *hardening
+    read_only: true
     depends_on:
       zabbix-web:
         condition: service_healthy
     environment:
       ZABBIX_URL: http://zabbix-web:8080
-      ZABBIX_ADMIN_PASSWORD: ${ZABBIX_ADMIN_PASSWORD:?defina ZABBIX_ADMIN_PASSWORD no .env}
+      ZABBIX_ADMIN_PASSWORD: ${ZABBIX_ADMIN_PASSWORD:?defina ZABBIX_ADMIN_PASSWORD no .env (rode make env)}
+      ZABBIX_GRAFANA_USER: grafana
+      ZABBIX_GRAFANA_PASSWORD: ${ZABBIX_GRAFANA_PASSWORD:?defina ZABBIX_GRAFANA_PASSWORD no .env (rode make env)}
       ZABBIX_AGENT_DNS: zabbix-agent
     volumes:
       - ./scripts/zabbix-init.sh:/zabbix-init.sh:ro
-    entrypoint: ["/bin/sh", "-c", "apk add --no-cache curl jq >/dev/null && sh /zabbix-init.sh"]
+    entrypoint: ["/bin/sh", "/zabbix-init.sh"]
+    logging: *logging
     networks: [frontend]
 
   grafana:
     image: grafana/grafana:${GRAFANA_VERSION:-12.4.16}
     restart: unless-stopped
+    <<: *hardening
+    read_only: true
+    tmpfs:
+      - /tmp
     depends_on:
       zabbix-init:
         condition: service_completed_successfully
     environment:
       TZ: ${TZ:-America/Sao_Paulo}
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env (rode make env)}
       GF_PLUGINS_PREINSTALL_SYNC: alexanderzobnin-zabbix-app
+      # Endurecimento do Grafana
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_ALLOW_ORG_CREATE: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_SECURITY_COOKIE_SAMESITE: strict
+      GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/zabbix-overview.json
+      # O Grafana lê o Zabbix com o usuário somente leitura criado pelo zabbix-init.
       ZABBIX_URL: http://zabbix-web:8080/api_jsonrpc.php
-      ZABBIX_USER: Admin
-      ZABBIX_PASSWORD: ${ZABBIX_ADMIN_PASSWORD}
+      ZABBIX_USER: grafana
+      ZABBIX_PASSWORD: ${ZABBIX_GRAFANA_PASSWORD:?defina ZABBIX_GRAFANA_PASSWORD no .env (rode make env)}
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      # Só em 127.0.0.1 por padrão (HTTP sem TLS). Veja BIND_ADDRESS no .env.
+      - "${BIND_ADDRESS:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    logging: *logging
     networks: [frontend]
 
 volumes:
@@ -129,5 +195,10 @@ volumes:
   grafana-data:
 
 networks:
+  # Só o banco e quem fala com ele. internal: sem saída para a internet.
+  db:
+    internal: true
+  # Zabbix server e agente (o server precisa alcançar os hosts monitorados).
   backend:
+  # Interface web, Grafana e init.
   frontend:
