@@ -7,9 +7,11 @@
 set -eu
 cd "$(dirname "$0")/.."
 DEST=kubernetes/base/files
+# Lixo que o macOS (Finder) cria nas pastas: .DS_Store e ._* (AppleDouble).
+# Não pode ir para o Kubernetes nem fazer o --check acusar diferença.
 
 if [ "${1:-}" = "--check" ]; then
-  if diff -r grafana "$DEST/grafana" && diff scripts/zabbix-init.sh "$DEST/zabbix-init.sh"; then
+  if diff -r -x .DS_Store -x '._*' grafana "$DEST/grafana" && diff scripts/zabbix-init.sh "$DEST/zabbix-init.sh"; then
     echo "kubernetes/base/files está sincronizado"
     exit 0
   fi
@@ -21,4 +23,5 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 cp -r grafana "$DEST/grafana"
 cp scripts/zabbix-init.sh "$DEST/zabbix-init.sh"
+find "$DEST" -type f \( -name .DS_Store -o -name '._*' \) -exec rm -f {} +
 echo "arquivos copiados para $DEST"
