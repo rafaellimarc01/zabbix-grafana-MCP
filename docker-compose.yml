@@ -272,6 +272,76 @@ services:
     logging: *logging
     networks: [frontend]
 
+  # ---- MCP: Zabbix e Grafana para IAs (Claude, ChatGPT...) --------------------
+  # Só sobem com o perfil "mcp". Use "make mcp", que cria os usuários e tokens
+  # somente leitura e mostra como conectar os clientes (veja "MCP" no README).
+  # Os dois só escutam em 127.0.0.1 (nunca usam BIND_ADDRESS): são para IAs
+  # rodando nesta máquina.
+
+  # MCP oficial do Zabbix (só existe a partir do Zabbix 8.0). Não guarda
+  # credencial nenhuma: cada pedido traz o token de API do usuário "mcp" e o
+  # Zabbix aplica as permissões dele. Só as ferramentas de leitura (*_get) ficam
+  # expostas; as que devolvem chaves de itens, macros, interfaces e histórico
+  # bruto (que costumam ter segredos) ficam de fora, como no padrão da imagem.
+  zabbix-mcp:
+    image: zabbix/zabbix-mcp-server:${ZABBIX_MCP_VERSION:-alpine-8.0.0}
+    profiles: [mcp]
+    restart: unless-stopped
+    <<: *hardening
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      zabbix-web:
+        condition: service_healthy
+    environment:
+      ZBX_FRONTEND_URL: http://zabbix-web:8080/api_jsonrpc.php
+      # A porta só é publicada em 127.0.0.1; as conexões chegam pela rede do
+      # Docker (faixas privadas).
+      ZBX_ALLOWEDIP: 127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      ZBX_DENYTOOL_0: item_get
+      ZBX_DENYTOOL_1: lld_get
+      ZBX_DENYTOOL_2: interface_get
+      ZBX_DENYTOOL_3: macro_get
+      ZBX_DENYTOOL_4: history_get
+      ZBX_ALLOWTOOL_REGEXP_5: _get$$
+      ZBX_DENYTOOL_6: "*"
+    ports:
+      - "127.0.0.1:${MCP_ZABBIX_PORT:-8443}:8443"
+    logging: *logging
+    networks: [frontend]
+
+  # MCP oficial do Grafana, só com ferramentas de leitura de dashboards,
+  # datasources, alertas e anotações, e com a consulta dos painéis (que traz os
+  # dados do Zabbix pelo plugin). Usa a service account "mcp" (Viewer) e exige o
+  # token GRAFANA_MCP_CLIENT_TOKEN de quem chama.
+  grafana-mcp:
+    image: grafana/mcp-grafana:${GRAFANA_MCP_VERSION:-2.4.0}
+    profiles: [mcp]
+    restart: unless-stopped
+    <<: *hardening
+    read_only: true
+    depends_on:
+      grafana:
+        condition: service_healthy
+    command:
+      - --transport=streamable-http
+      - --address=0.0.0.0:8000
+      - --disable-write
+      - --enabled-tools=search,datasource,dashboard,alerting,annotations,navigation,runpanelquery
+      - --allowed-hosts=localhost:${MCP_GRAFANA_PORT:-8000},127.0.0.1:${MCP_GRAFANA_PORT:-8000}
+    environment:
+      GRAFANA_URL: http://grafana:3000
+      GRAFANA_ORG_ID: "1"
+      GRAFANA_SERVICE_ACCOUNT_TOKEN: ${GRAFANA_MCP_SA_TOKEN:-}
+      MCP_GRAFANA_SERVER_TOKEN: ${GRAFANA_MCP_CLIENT_TOKEN:-}
+      # Sem estatísticas de uso enviadas à Grafana Labs.
+      DO_NOT_TRACK: "1"
+    ports:
+      - "127.0.0.1:${MCP_GRAFANA_PORT:-8000}:8000"
+    logging: *logging
+    networks: [frontend]
+
 volumes:
   postgres-data:
   postgres-backups:

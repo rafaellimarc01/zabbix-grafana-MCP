@@ -348,3 +348,70 @@ jobs:
       - name: Logs em caso de falha
         if: failure()
         run: docker compose logs --tail=200
+
+  # MCPs do Zabbix (8.0) e do Grafana: make mcp, só leitura, só 127.0.0.1.
+  mcp-test:
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Sobe o ambiente no Zabbix 8.0
+        run: |
+          ./scripts/generate-secrets.sh compose
+          sed -i 's/^ZABBIX_VERSION=.*/ZABBIX_VERSION=alpine-8.0.0/' .env
+          docker compose up -d --wait --wait-timeout 300 postgres postgres-backup zabbix-server zabbix-web zabbix-agent
+          docker compose up zabbix-init --exit-code-from zabbix-init
+          docker compose up -d --wait --wait-timeout 180 grafana
+
+      - name: make mcp
+        run: |
+          ./scripts/mcp-setup.sh | tee mcp.log
+          grep -q 'claude mcp add --transport http zabbix' mcp.log
+          sleep 5
+          docker compose --profile mcp ps
+
+      - name: Testa os MCPs
+        run: |
+          set -a; . ./.env; set +a
+          test -n "$ZABBIX_MCP_TOKEN" && test -n "$GRAFANA_MCP_SA_TOKEN" && test -n "$GRAFANA_MCP_CLIENT_TOKEN"
+          mcp() { curl -sS -H "Authorization: Bearer $2" -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' -d "$3" "$1" | sed -n 's/^data: //; /^{/p'; }
+          Z=http://127.0.0.1:8443/mcp; G=http://127.0.0.1:8000/mcp
+          # Zabbix: só ferramentas de leitura
+          mcp $Z "$ZABBIX_MCP_TOKEN" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' > ztools.json
+          jq -r '.result.tools[].name' ztools.json | tee ztools.txt
+          jq -e '[.result.tools[].name] | length >= 5 and all(endswith("_get"))' ztools.json
+          ! grep -qE 'item_get|macro_get|history_get|maintenance_create|problem_acknowledge' ztools.txt
+          mcp $Z "$ZABBIX_MCP_TOKEN" '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"host_get","arguments":{}}}' \
+            | jq -e '.result.isError != true and (.result.content[0].text | contains("Zabbix server"))'
+          # Token errado não lê nada
+          mcp $Z errado '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"host_get","arguments":{}}}' \
+            | jq -e '.result.isError == true'
+          # Grafana: exige token, lista o datasource do Zabbix e os dashboards
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' $G)" = 401
+          mcp $G "$GRAFANA_MCP_CLIENT_TOKEN" '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' > gtools.json
+          ! jq -r '.result.tools[].name' gtools.json | grep -qE '^(update_dashboard|create_|delete_)'
+          mcp $G "$GRAFANA_MCP_CLIENT_TOKEN" '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_datasources","arguments":{}}}' \
+            | jq -e '.result.content[0].text | contains("alexanderzobnin-zabbix-datasource")'
+          mcp $G "$GRAFANA_MCP_CLIENT_TOKEN" '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_dashboards","arguments":{"query":"Zabbix"}}}' \
+            | jq -e '.result.content[0].text | contains("zabbix-overview")'
+          # Portas só em 127.0.0.1
+          docker compose --profile mcp port zabbix-mcp 8443 | grep -q '^127\.0\.0\.1:'
+          docker compose --profile mcp port grafana-mcp 8000 | grep -q '^127\.0\.0\.1:'
+
+      - name: make mcp de novo mantém os tokens
+        run: |
+          set -a; . ./.env; set +a
+          before="$ZABBIX_MCP_TOKEN $GRAFANA_MCP_SA_TOKEN $GRAFANA_MCP_CLIENT_TOKEN"
+          ./scripts/mcp-setup.sh | grep '^\[mcp\]'
+          set -a; . ./.env; set +a
+          test "$before" = "$ZABBIX_MCP_TOKEN $GRAFANA_MCP_SA_TOKEN $GRAFANA_MCP_CLIENT_TOKEN"
+
+      - name: Logs em caso de falha
+        if: failure()
+        run: docker compose --profile mcp logs --tail=200
