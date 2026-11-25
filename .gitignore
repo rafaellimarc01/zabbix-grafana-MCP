@@ -16,3 +16,8 @@ kubernetes/base/secrets.env
 *.swp
 .DS_Store
 ._*
+# Exemplos de notificação ativados (podem ter o id do chat do Telegram)
+grafana/provisioning/alerting/email.yaml
+grafana/provisioning/alerting/telegram.yaml
+kubernetes/base/files/grafana/provisioning/alerting/email.yaml
+kubernetes/base/files/grafana/provisioning/alerting/telegram.yaml

@@ -2,7 +2,7 @@
 
 [Versão em português](README.md)
 
-A ready-made template to run **Zabbix 7.0 LTS** and **Grafana** with either **Docker Compose** or **Kubernetes** (Kustomize). Grafana ships with the Zabbix plugin installed, the Zabbix data source provisioned and two dashboards (hosts overview and Zabbix server health).
+A ready-made template to run **Zabbix 7.0 LTS** and **Grafana** with either **Docker Compose** or **Kubernetes** (Kustomize). Grafana ships with the Zabbix plugin installed, the Zabbix data source provisioned, two dashboards (hosts overview and Zabbix server health) and ready-made alert rules.
 
 ## Docker Compose
 
@@ -36,6 +36,25 @@ Everything goes into the `monitoring` namespace. `kubernetes/base/files/` holds 
 ## Database backups
 
 The Zabbix database is backed up automatically with `pg_dump`: the `postgres-backup` Compose service runs at startup and daily at `BACKUP_TIME` (default `02:00`, keeping `BACKUP_KEEP_DAYS=7`) into the `postgres-backups` volume; on Kubernetes a CronJob does the same into the `postgres-backups` PVC. Run `make backup` for an on-demand backup. Restore steps (all platforms) are in the Portuguese README, section "Backup do banco".
+
+## Alerts
+
+Grafana ships with 5 provisioned alert rules (`grafana/provisioning/alerting/zabbix-rules.yaml`, folder **Zabbix**) that query Zabbix and fire one alert per host (and per filesystem) for every host using the stock **Linux by Zabbix agent** and **Zabbix server health** templates:
+
+| Rule | Zabbix item | Fires when | Severity |
+|---|---|---|---|
+| Host indisponível (host down) | `Zabbix agent availability` | agent unavailable for 3 min | `critical` |
+| CPU alta (high CPU) | `CPU utilization` | 10-min average above 90% for 5 min | `warning` |
+| Memória alta (high memory) | `Memory utilization` | 10-min average above 90% for 5 min | `warning` |
+| Disco quase cheio (disk almost full) | `FS [*]: Space: Used, in %` | above 90% for 10 min | `warning` |
+| Fila do Zabbix acumulada (Zabbix queue) | `Queue over 10 minutes` | more than 100 delayed items for 10 min | `warning` |
+
+Out of the box, alerts only show up in Grafana (**Alerting → Alert rules**). To get notified, enable **one** example from `grafana/alerting-examples/`:
+
+- **Email:** set `GRAFANA_SMTP_ENABLED=true`, `GRAFANA_SMTP_HOST`, `GRAFANA_SMTP_USER`, `GRAFANA_SMTP_PASS`, `GRAFANA_SMTP_FROM` and `ALERT_EMAIL_TO` (`;`-separated) in `.env`, then `cp grafana/alerting-examples/email.yaml grafana/provisioning/alerting/ && docker compose up -d grafana`.
+- **Telegram:** set `TELEGRAM_BOT_TOKEN` in `.env`, copy `grafana/alerting-examples/telegram.yaml` to `grafana/provisioning/alerting/`, replace `COLOQUE_O_CHAT_ID_AQUI` with your chat id in the copy (Grafana turns a chat id coming from an env var into a number and rejects it), then `docker compose up -d grafana`.
+
+Set `GRAFANA_ROOT_URL` so links in notifications work. Enabled copies are git-ignored. On Kubernetes, put the same variables in `kubernetes/base/secrets.env`, add the copied file to the `grafana-alerting` `configMapGenerator` in `kubernetes/base/kustomization.yaml`, run `./scripts/sync-k8s-files.sh` and apply again. To change a threshold, edit `params` in step `C` of the rule and restart Grafana.
 
 ## Security
 

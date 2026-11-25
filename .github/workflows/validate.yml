@@ -158,6 +158,36 @@ jobs:
           # PostgreSQL não fica exposto no host
           ! (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null
 
+      - name: Testa os alertas do Grafana
+        run: |
+          set -a; . ./.env; set +a
+          g() { curl -fsS -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" "$@"; }
+          # As 5 regras provisionadas estão na pasta Zabbix
+          g http://localhost:3000/api/v1/provisioning/alert-rules | tee rules.json | jq -e 'length == 5'
+          # A consulta das regras ao Zabbix devolve uma série por host, com o
+          # label "host" que as mensagens usam
+          jq '{data: (.[] | select(.uid == "zbx-cpu-alta") | .data)}' rules.json > eval.json
+          g -H 'Content-Type: application/json' -d @eval.json http://localhost:3000/api/v1/eval \
+            | tee /dev/stderr | jq -e '[.results.A.frames[].schema.fields[] | select(.labels.host == "Zabbix server")] | length >= 1'
+          # Toda regra é avaliada sem erro (espera a primeira avaliação, a cada 1 min)
+          for i in $(seq 1 30); do
+            g http://localhost:3000/api/prometheus/grafana/api/v1/rules > state.json
+            n=$(jq '[.data.groups[].rules[] | select(.lastEvaluation > "2000")] | length' state.json)
+            [ "$n" = 5 ] && break
+            sleep 5
+          done
+          jq -c '.data.groups[].rules[] | {name, health, state, lastError}' state.json
+          jq -e '[.data.groups[].rules[] | select(.health == "error")] | length == 0' state.json
+          # Os exemplos de notificação são aceitos pelo Grafana
+          cp grafana/alerting-examples/email.yaml grafana/provisioning/alerting/
+          ALERT_EMAIL_TO='ops@example.com' docker compose up -d --wait --wait-timeout 120 grafana
+          g http://localhost:3000/api/v1/provisioning/policies | jq -e '.receiver == "E-mail"'
+          rm grafana/provisioning/alerting/email.yaml
+          sed 's/COLOQUE_O_CHAT_ID_AQUI/-1001234567890/' grafana/alerting-examples/telegram.yaml > grafana/provisioning/alerting/telegram.yaml
+          TELEGRAM_BOT_TOKEN='123456:teste' docker compose up -d --wait --wait-timeout 120 grafana
+          g http://localhost:3000/api/v1/provisioning/policies | jq -e '.receiver == "Telegram"'
+          rm grafana/provisioning/alerting/telegram.yaml
+
       - name: Testa o backup do banco
         run: |
           # O postgres-backup só fica healthy depois do primeiro backup (feito ao subir).

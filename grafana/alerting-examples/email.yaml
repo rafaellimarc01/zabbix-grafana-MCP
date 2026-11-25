@@ -1,0 +1,33 @@
+# Exemplo: envia os alertas do Grafana por e-mail.
+#
+# Como ativar (Docker Compose):
+#   1. No .env, preencha GRAFANA_SMTP_* e ALERT_EMAIL_TO e mude
+#      GRAFANA_SMTP_ENABLED=true
+#   2. cp grafana/alerting-examples/email.yaml grafana/provisioning/alerting/
+#   3. docker compose up -d grafana
+# No Kubernetes, veja a seção "Alertas" do README.
+#
+# Ative só UM exemplo por vez: cada um define a política de notificação
+# inteira (a árvore de roteamento), e o último arquivo lido venceria.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: E-mail
+    receivers:
+      - uid: alerta-email
+        type: email
+        settings:
+          # Vários destinatários: separe com ";" (ex.: a@x.com;b@x.com).
+          addresses: "${ALERT_EMAIL_TO}"
+          singleEmail: true
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: E-mail
+    # Um e-mail por regra (ex.: "CPU alta"), juntando os hosts afetados.
+    group_by: ["grafana_folder", "alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h

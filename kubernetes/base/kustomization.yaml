@@ -55,6 +55,11 @@ configMapGenerator:
   - name: grafana-dashboard-providers
     files:
       - files/grafana/provisioning/dashboards/dashboards.yaml
+  # Regras de alerta. Para notificar por e-mail ou Telegram, acrescente aqui
+  # files/grafana/alerting-examples/email.yaml (ou telegram.yaml).
+  - name: grafana-alerting
+    files:
+      - files/grafana/provisioning/alerting/zabbix-rules.yaml
   - name: grafana-dashboards
     files:
       - files/grafana/dashboards/zabbix-overview.json

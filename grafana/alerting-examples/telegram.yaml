@@ -1,0 +1,38 @@
+# Exemplo: envia os alertas do Grafana para um chat ou grupo do Telegram.
+#
+# Como ativar (Docker Compose):
+#   1. Crie um bot com o @BotFather e pegue o token. Adicione o bot ao grupo
+#      (ou mande uma mensagem para ele) e descubra o chat id em
+#      https://api.telegram.org/bot<TOKEN>/getUpdates
+#   2. No .env, preencha TELEGRAM_BOT_TOKEN
+#   3. cp grafana/alerting-examples/telegram.yaml grafana/provisioning/alerting/
+#      e troque COLOQUE_O_CHAT_ID_AQUI pelo id do chat (na cópia)
+#   4. docker compose up -d grafana
+# No Kubernetes, veja a seção "Alertas" do README.
+#
+# Ative só UM exemplo por vez: cada um define a política de notificação
+# inteira (a árvore de roteamento), e o último arquivo lido venceria.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: Telegram
+    receivers:
+      - uid: alerta-telegram
+        type: telegram
+        settings:
+          bottoken: "${TELEGRAM_BOT_TOKEN}"
+          # Coloque o id do chat aqui, entre aspas (ex.: "-1001234567890").
+          # Não dá para usar variável de ambiente: o Grafana transforma o id
+          # em número e recusa o arquivo.
+          chatid: "COLOQUE_O_CHAT_ID_AQUI"
+          disable_web_page_preview: true
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: Telegram
+    group_by: ["grafana_folder", "alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
