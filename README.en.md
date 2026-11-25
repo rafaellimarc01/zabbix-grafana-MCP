@@ -53,7 +53,7 @@ Port 10051 (trapper) listens on all interfaces for active agents. Docker-publish
 
 ### Zabbix 8.0
 
-Zabbix 7.0 LTS is the default. Zabbix 8.0 LTS is also supported and tested in CI: set `ZABBIX_VERSION=alpine-8.0.0` in `.env` (Docker Compose), or add `- ../../components/zabbix-8` under `components:` in your Kubernetes overlay. Upgrading an existing 7.0 install migrates the database in place and cannot be undone, so run `make backup` first. Details in the Portuguese README, section "Zabbix 8.0".
+Zabbix 7.0 LTS is the default. Zabbix 8.0 LTS is also supported and tested in CI: set `ZABBIX_VERSION=alpine-8.0.0` in `.env` (Docker Compose), or add `- ../../components/zabbix-8` under `components:` in your Kubernetes overlay. To upgrade an existing 7.0 Compose install, run `make upgrade-8`: it backs up the database, switches `.env` to 8.0, waits for the in-place database upgrade and reruns the init. `./scripts/upgrade-zabbix-8.sh --rollback <dump>` goes back to 7.0 by restoring that backup. Details in the Portuguese README, section "Zabbix 8.0".
 
 ## Kubernetes on Linux
 

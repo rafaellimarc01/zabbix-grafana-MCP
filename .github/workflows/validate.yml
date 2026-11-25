@@ -291,3 +291,60 @@ jobs:
       - name: Logs em caso de falha
         if: failure()
         run: docker compose logs --tail=200
+
+  # Atualização de um ambiente 7.0 com dados para o 8.0 (make upgrade-8) e
+  # volta para o 7.0 com o backup feito antes.
+  upgrade-test:
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Sobe o ambiente no Zabbix 7.0 e grava dados
+        run: |
+          ./scripts/generate-secrets.sh compose
+          grep -q '^ZABBIX_VERSION=alpine-7\.0\.' .env
+          docker compose up -d --wait --wait-timeout 300 postgres postgres-backup zabbix-server zabbix-web zabbix-agent
+          docker compose up zabbix-init --exit-code-from zabbix-init
+          docker compose up -d --wait --wait-timeout 180 grafana
+          set -a; . ./.env; set +a
+          api() { curl -fsS -H 'Content-Type: application/json-rpc' ${3:+-H "Authorization: Bearer $3"} \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":1}" http://localhost:8080/api_jsonrpc.php; }
+          TOKEN=$(api user.login "{\"username\":\"Admin\",\"password\":\"$ZABBIX_ADMIN_PASSWORD\"}" | jq -r .result)
+          api host.create '{"host":"criado-no-7","groups":[{"groupid":"2"}]}' "$TOKEN" | jq -e .result
+
+      - name: Atualiza para o 8.0 (make upgrade-8)
+        run: ./scripts/upgrade-zabbix-8.sh --yes | tee upgrade.log
+
+      - name: Confere o 8.0 com os dados do 7.0
+        run: |
+          set -a; . ./.env; set +a
+          test "$ZABBIX_VERSION" = alpine-8.0.0
+          grep -q '^ZABBIX_VERSION=alpine-7\.0\.' .env.antes-zabbix-8
+          api() { curl -fsS -H 'Content-Type: application/json-rpc' ${3:+-H "Authorization: Bearer $3"} \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":1}" http://localhost:8080/api_jsonrpc.php; }
+          test "$(api apiinfo.version '{}' | jq -r .result)" = 8.0.0
+          docker compose logs zabbix-server | grep -q 'database upgrade fully completed'
+          TOKEN=$(api user.login "{\"username\":\"grafana\",\"password\":\"$ZABBIX_GRAFANA_PASSWORD\"}" | jq -r .result)
+          api host.get '{"output":["host"]}' "$TOKEN" | jq -e '[.result[].host] | index("criado-no-7")'
+          curl -fsS -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" http://localhost:3000/api/datasources/uid/zabbix/health | jq -e '.status == "OK"'
+
+      - name: Volta para o 7.0 com o backup
+        run: |
+          dump=$(sed -n 's/^.*--rollback \(zabbix-[0-9-]*\.dump\).*$/\1/p' upgrade.log)
+          test -n "$dump"
+          ./scripts/upgrade-zabbix-8.sh --rollback "$dump" --yes
+          set -a; . ./.env; set +a
+          api() { curl -fsS -H 'Content-Type: application/json-rpc' ${3:+-H "Authorization: Bearer $3"} \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":1}" http://localhost:8080/api_jsonrpc.php; }
+          test "$(api apiinfo.version '{}' | jq -r .result)" = 7.0.32
+          TOKEN=$(api user.login "{\"username\":\"grafana\",\"password\":\"$ZABBIX_GRAFANA_PASSWORD\"}" | jq -r .result)
+          api host.get '{"output":["host"]}' "$TOKEN" | jq -e '[.result[].host] | index("criado-no-7")'
+          curl -fsS -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" http://localhost:3000/api/datasources/uid/zabbix/health | jq -e '.status == "OK"'
+
+      - name: Logs em caso de falha
+        if: failure()
+        run: docker compose logs --tail=200

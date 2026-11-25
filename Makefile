@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 K8S_OVERLAY ?= local
 
-.PHONY: help env check-env up down logs ps reset backup backup-list k8s-secrets k8s-render k8s-apply k8s-delete sync-k8s validate
+.PHONY: help env check-env up down logs ps reset backup backup-list upgrade-8 k8s-secrets k8s-render k8s-apply k8s-delete sync-k8s validate
 
 help: ## Mostra esta ajuda
 	@# Regex sem "*?" (não guloso), que o grep/awk do macOS (BSD) não aceitam.
@@ -31,6 +31,9 @@ backup: ## Faz um backup do banco agora (além do automático diário)
 
 backup-list: ## Lista os backups do banco
 	docker compose exec postgres-backup sh /postgres-backup.sh list
+
+upgrade-8: ## Atualiza do Zabbix 7.0 para o 8.0 (faz backup antes; veja o README)
+	./scripts/upgrade-zabbix-8.sh
 
 reset: ## APAGA tudo, inclusive volumes/dados
 	docker compose down -v

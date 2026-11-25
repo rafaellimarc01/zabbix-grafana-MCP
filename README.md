@@ -485,9 +485,40 @@ Datas da [política de ciclo de vida do Zabbix](https://www.zabbix.com/life_cycl
 - O plugin do Grafana precisa da versão 6.10 ou mais nova para ler trends do 8.0. O modelo fixa a 6.12.0.
 - O PostgreSQL mínimo passou para 15. O modelo usa o 16.
 
-**Atualizar um ambiente que já roda o 7.0**
+**Atualizar um ambiente que já roda o 7.0 (Docker Compose)**
 
-Ainda não há um passo a passo automatizado (vem na próxima versão do modelo). Até lá: faça um backup (`make backup`) e copie-o para fora do servidor. Depois troque a tag e rode `make up`. O Zabbix server atualiza o banco sozinho ao subir. **Não há volta**: para retornar ao 7.0 é preciso restaurar o backup.
+A atualização migra o banco no lugar e **não tem volta** sem backup. O comando abaixo faz o backup antes e guarda o nome do arquivo; o CI testa a atualização e o retorno a cada mudança.
+
+```bash
+make upgrade-8        # sem make: ./scripts/upgrade-zabbix-8.sh
+```
+
+Ele pede para digitar `SIM` e então:
+
+1. Faz um backup do banco e mostra o nome do arquivo (por exemplo `zabbix-20261125-020000.dump`).
+2. Troca `ZABBIX_VERSION` no `.env` para `alpine-8.0.0` (o `.env` antigo fica em `.env.antes-zabbix-8`).
+3. Sobe o Zabbix 8.0 e espera o server atualizar o banco. Em bancos grandes, com muito histórico, isso pode levar de minutos a horas; acompanhe com `docker compose logs -f zabbix-server`.
+4. Roda o `zabbix-init` e reinicia o Grafana.
+
+Antes de começar, copie um backup para fora do servidor (veja [Backup do banco](#backup-do-banco)). Se você tem agentes ou proxies fora deste Compose: agentes 7.0 continuam funcionando com o server 8.0, mas proxies 7.0 ficam em modo limitado até serem atualizados.
+
+**Voltar para o 7.0** (apaga os dados gravados depois da atualização):
+
+```bash
+./scripts/upgrade-zabbix-8.sh --rollback zabbix-20261125-020000.dump
+```
+
+**Kubernetes:** faça um backup manual e espere terminar, depois acrescente o componente e aplique.
+
+```bash
+kubectl -n monitoring create job --from=cronjob/postgres-backup backup-antes-zabbix-8
+kubectl -n monitoring wait --for=condition=complete job/backup-antes-zabbix-8 --timeout=30m
+# acrescente "- ../../components/zabbix-8" ao components: do overlay e aplique
+kubectl apply -k kubernetes/overlays/local
+kubectl -n monitoring logs -f deploy/zabbix-server   # espere "database upgrade fully completed"
+```
+
+Para voltar, restaure o backup como em [Backup do banco → Kubernetes](#kubernetes) depois de recriar o esquema do banco e tire o componente do overlay.
 
 ## Personalizando
 
