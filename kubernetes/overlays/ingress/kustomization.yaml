@@ -1,5 +1,7 @@
-# Para clusters com Ingress Controller (ex.: ingress-nginx), com HTTPS.
-# Troque os domínios em ingress.yaml antes de aplicar.
+# Para clusters que usam Ingress (ex.: Traefik, padrão do k3s), com HTTPS.
+# Troque os domínios e, se o controlador não for o Traefik, a classe e as
+# anotações em ingress.yaml antes de aplicar. Para produção, prefira o overlay
+# "gateway" (Gateway API).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -7,10 +9,5 @@ resources:
   - ../../base
   - ingress.yaml
 
-# Atrás de HTTPS, o cookie de sessão do Grafana só trafega criptografado.
-patches:
-  - target: {kind: Deployment, name: grafana}
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value: {name: GF_SECURITY_COOKIE_SECURE, value: "true"}
+components:
+  - ../../components/external-access

@@ -77,6 +77,40 @@ spec:
           resources:
             requests: {cpu: 10m, memory: 16Mi}
             limits: {memory: 64Mi}
+        # Configuração do Zabbix via API (idempotente): cria/atualiza o usuário
+        # somente leitura "grafana" e liga o agente ao host "Zabbix server".
+        # Roda a cada start do Grafana, então qualquer mudança no secrets.env
+        # ou no script (que reinicia o pod) já roda o init de novo. Para incluir
+        # grupos de hosts novos: kubectl -n monitoring rollout restart deploy/grafana
+        - name: zabbix-init
+          image: zabbix/zabbix-web-nginx-pgsql
+          command: ["/bin/sh", "/scripts/zabbix-init.sh"]
+          securityContext:
+            runAsUser: 1997
+            runAsGroup: 1995
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          env:
+            - name: ZABBIX_URL
+              value: http://zabbix-web:8080
+            - name: ZABBIX_AGENT_DNS
+              value: zabbix-agent
+            - name: ZABBIX_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_ADMIN_PASSWORD}
+            - name: ZABBIX_GRAFANA_USER
+              value: grafana
+            - name: ZABBIX_GRAFANA_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_GRAFANA_PASSWORD}
+          volumeMounts:
+            - name: zabbix-init-script
+              mountPath: /scripts
       containers:
         - name: grafana
           image: grafana/grafana
@@ -125,7 +159,7 @@ spec:
               value: /var/lib/grafana/dashboards/zabbix-overview.json
             - name: ZABBIX_URL
               value: http://zabbix-web:8080/api_jsonrpc.php
-            # Usuário somente leitura criado pelo Job zabbix-init.
+            # Usuário somente leitura criado pelo init container zabbix-init.
             - name: ZABBIX_USER
               value: grafana
             - name: ZABBIX_PASSWORD
@@ -188,6 +222,9 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: zabbix-init-script
+          configMap:
+            name: zabbix-init-script
         - name: tmp
           emptyDir: {}
         - name: data

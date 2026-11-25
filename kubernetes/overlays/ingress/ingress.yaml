@@ -1,20 +1,28 @@
+# Ingress com HTTPS para o Zabbix web e o Grafana.
+#
+# Vem pronto para o Traefik (padrão do k3s): as anotações abaixo fazem ele
+# atender só em HTTPS (entrypoint "websecure"), então as senhas nunca trafegam
+# sem criptografia. Para outro controlador, troque ingressClassName e as
+# anotações pelas equivalentes (ex.: HAProxy Ingress:
+# haproxy.org/ssl-redirect: "true").
+#
+# O ingress-nginx (kubernetes/ingress-nginx) foi aposentado em março de 2026 e
+# não recebe mais correções de segurança: use outro controlador ou o overlay
+# "gateway".
+#
+# Certificado: com cert-manager, descomente a anotação para ele criar o Secret
+# sozinho. Sem cert-manager, crie o Secret com o seu certificado:
+#   kubectl -n monitoring create secret tls zabbix-grafana-tls --cert=tls.crt --key=tls.key
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: zabbix-grafana
   annotations:
-    # Com cert-manager instalado, descomente para gerar o certificado sozinho:
     # cert-manager.io/cluster-issuer: letsencrypt
-    # Sem cert-manager, crie o Secret com o seu certificado:
-    #   kubectl -n monitoring create secret tls zabbix-grafana-tls --cert=tls.crt --key=tls.key
-    # Enquanto o Secret não existir, o ingress-nginx usa um certificado
-    # autoassinado próprio (o navegador vai avisar).
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-body-size: 16m
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
-  ingressClassName: nginx
-  # HTTPS ligado por padrão: as senhas do Zabbix e do Grafana não trafegam
-  # sem criptografia. Troque os domínios aqui e nas regras abaixo.
+  ingressClassName: traefik
   tls:
     - hosts: [zabbix.example.com, grafana.example.com]
       secretName: zabbix-grafana-tls

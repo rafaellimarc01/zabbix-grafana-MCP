@@ -120,6 +120,35 @@ services:
     logging: *logging
     networks: [db, backend]
 
+  # Tarefa única: troca a senha padrão ("zabbix") do Admin direto no banco,
+  # antes de a interface web subir. Assim o Admin nunca fica acessível com a
+  # senha padrão, mesmo que o zabbix-init falhe. Só mexe no Admin se a senha
+  # dele ainda for a padrão.
+  zabbix-admin-password:
+    image: postgres:${POSTGRES_VERSION:-16-alpine}
+    restart: "no"
+    <<: *hardening
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-zabbix}
+      PGUSER: ${POSTGRES_USER:-zabbix}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env (rode make env)}
+      ZABBIX_ADMIN_PASSWORD: ${ZABBIX_ADMIN_PASSWORD:?defina ZABBIX_ADMIN_PASSWORD no .env (rode make env)}
+    volumes:
+      - ./scripts/zabbix-admin-password.sh:/zabbix-admin-password.sh:ro
+    entrypoint: ["/bin/sh", "/zabbix-admin-password.sh"]
+    logging: *logging
+    networks: [db]
+
   zabbix-web:
     image: zabbix/zabbix-web-nginx-pgsql:${ZABBIX_VERSION:-alpine-7.0.32}
     restart: unless-stopped
@@ -129,6 +158,8 @@ services:
         condition: service_healthy
       zabbix-server:
         condition: service_started
+      zabbix-admin-password:
+        condition: service_completed_successfully
     environment:
       <<: *zabbix-db-env
       ZBX_SERVER_HOST: zabbix-server

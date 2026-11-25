@@ -1,0 +1,19 @@
+# NodePort: a conexão pode chegar de qualquer nó ou máquina, então o Zabbix web
+# e o Grafana aceitam qualquer origem nas portas deles. Só para laboratório.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-nodeport
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [zabbix-web, grafana]
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+        - port: 3000
+          protocol: TCP

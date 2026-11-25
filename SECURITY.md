@@ -18,21 +18,24 @@ aos respectivos projetos.
 - O Docker Compose não sobe se faltar alguma senha; `make up` e `make k8s-apply`
   recusam senhas vazias, curtas (menos de 12) ou de exemplo. No Kubernetes, o
   Grafana também confere as senhas antes de iniciar.
-- A senha padrão `zabbix` do Admin é trocada no primeiro start.
+- A senha padrão `zabbix` do Admin é trocada direto no banco antes de a
+  interface web subir, então o Admin nunca fica acessível com ela.
 - O Grafana acessa o Zabbix com um usuário próprio (`grafana`), **somente
   leitura** e **sem acesso à interface web**, nunca com o Admin.
 
 **Rede**
 - PostgreSQL sem porta publicada e numa rede sem saída para a internet.
 - Docker: Zabbix web e Grafana escutam só em `127.0.0.1` por padrão.
-- Kubernetes: NetworkPolicies negam toda entrada que não seja necessária; o
-  overlay `ingress` já vem com TLS e redirecionamento para HTTPS.
+- Kubernetes: NetworkPolicies negam toda entrada que não seja necessária. Nos
+  overlays `gateway` e `ingress`, o Zabbix web e o Grafana só aceitam conexões
+  do controlador de entrada; os dois overlays já vêm só com HTTPS.
 
 **Containers**
 - Todos rodam sem root (o PostgreSQL inclusive), sem capabilities do Linux e
   com `no-new-privileges` / `allowPrivilegeEscalation: false`.
   Exceção: o Zabbix server mantém só `NET_RAW`, para os pings ICMP (fping).
-- Sistema de arquivos somente leitura no PostgreSQL, Grafana e zabbix-init.
+- Sistema de arquivos somente leitura no PostgreSQL, Grafana, zabbix-init e
+  zabbix-admin-password.
 - Kubernetes: `seccompProfile: RuntimeDefault`, sem token de ServiceAccount
   montado, limites de memória, e o namespace com Pod Security `baseline`
   (aviso para `restricted`).
@@ -42,7 +45,7 @@ aos respectivos projetos.
 **Grafana**
 - Sem cadastro de usuários, sem acesso anônimo, sem criação de organizações,
   sem snapshots externos, sem Gravatar e sem telemetria. Cookie `SameSite=strict`
-  e, atrás de HTTPS (overlay `ingress`), cookie `Secure`.
+  e, atrás de HTTPS (overlays `gateway` e `ingress`), cookie `Secure`.
 
 **CI**
 - Token do GitHub só com leitura, Actions fixadas por SHA e atualizadas pelo
@@ -64,13 +67,19 @@ aos respectivos projetos.
 ## O que fica com você
 
 - **HTTPS.** Para acessar o Zabbix e o Grafana de outra máquina, coloque um
-  proxy reverso com TLS na frente (Docker) ou use o overlay `ingress` com um
-  certificado válido (cert-manager, por exemplo). Evite `BIND_ADDRESS=0.0.0.0`
+  proxy reverso com TLS na frente (Docker) ou use o overlay `gateway` (ou
+  `ingress`) com um certificado válido (cert-manager, por exemplo). O
+  ingress-nginx foi aposentado em março de 2026 e não recebe mais correções de
+  segurança: não o use para expor este ambiente. Evite `BIND_ADDRESS=0.0.0.0`
   sem TLS.
 - **Firewall do trapper (10051).** Ele precisa ficar aberto para os agentes
   ativos. Libere só as redes dos seus agentes e, de preferência, ative
   criptografia PSK ou certificado entre agentes e servidor
   ([documentação](https://www.zabbix.com/documentation/7.0/en/manual/encryption)).
+  Atenção: as portas publicadas pelo Docker **passam por cima do UFW e do
+  firewalld**. Filtre na chain `DOCKER-USER` ou use
+  `ZABBIX_SERVER_BIND_ADDRESS`; o passo a passo está em "Protegendo a porta
+  10051" no README.
 - **Senhas.** Guarde as senhas geradas num cofre. Trocar `POSTGRES_PASSWORD`
   depois do primeiro start não muda a senha do banco já criado.
 - **Kubernetes Secrets** ficam só em base64 no etcd. Em produção, ative a
@@ -82,7 +91,8 @@ aos respectivos projetos.
   dados do Zabbix, inclusive os hashes de senha: guarde-os protegidos.
 - **Novos grupos de hosts.** O usuário `grafana` recebe leitura nos grupos que
   existem quando o init roda. Ao criar grupos novos, rode o init de novo
-  (`docker compose up zabbix-init`, ou `kubectl apply -k` no Kubernetes) ou
+  (`docker compose up zabbix-init`, ou
+  `kubectl -n monitoring rollout restart deploy/grafana` no Kubernetes) ou
   adicione o grupo ao grupo de usuários "Grafana (somente leitura)".
 
 ## Atualizações
