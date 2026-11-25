@@ -10,7 +10,7 @@ The project delivers three things:
 |---|---|---|
 | **Zabbix 7.0 or 8.0 LTS** | 7.0 is the default; 8.0 is optional, tested in CI, with an automated 7.0 upgrade | [Zabbix 8.0](#zabbix-80) |
 | **Grafana with the Zabbix plugin** | Dashboards and alert rules, reading Zabbix through a read-only user | [Alerts](#alerts) |
-| **MCP for AI assistants** | The official Zabbix and Grafana MCP servers, read-only and bound to `127.0.0.1`, so Claude and other assistants on your machine can query your monitoring | [MCP](#mcp-zabbix-and-grafana-for-ai-assistants) |
+| **MCP for AI assistants** | A single MCP server (one URL, one token) that combines the official Zabbix and Grafana MCP servers, read-only and bound to `127.0.0.1`, so Claude and other assistants on your machine can query your monitoring | [MCP](#mcp-zabbix-and-grafana-for-ai-assistants) |
 
 ## Platforms
 
@@ -65,20 +65,22 @@ Zabbix 7.0 LTS is the default. Zabbix 8.0 LTS is also supported and tested in CI
 
 ## MCP: Zabbix and Grafana for AI assistants
 
-`make mcp` starts the official [Zabbix MCP server](https://hub.docker.com/r/zabbix/zabbix-mcp-server) (`127.0.0.1:8443`, requires Zabbix 8.0) and the official [Grafana MCP server](https://github.com/grafana/mcp-grafana) (`127.0.0.1:8000`), creates a read-only Zabbix user `mcp` with an API token and a Grafana `mcp` service account (Viewer), stores the tokens in `.env` and prints ready-to-paste client configs (`make mcp-config` prints them again).
+The assistant connects to **one MCP server**, `mcp-gateway` (`127.0.0.1:8765/mcp`), with **one token** (`MCP_TOKEN`). Behind it run the official [Zabbix MCP server](https://hub.docker.com/r/zabbix/zabbix-mcp-server) (requires Zabbix 8.0) and the official [Grafana MCP server](https://github.com/grafana/mcp-grafana), on the internal Docker network only. Their tools are exposed as `zabbix_*` and `grafana_*`. The gateway is this repo's `mcp-gateway/gateway.py`, plain Python standard library.
 
-- **No exposed ports:** both listen on `127.0.0.1` only, regardless of `BIND_ADDRESS`.
-- **Read-only:** Zabbix exposes only `*_get` tools (minus item keys, macros, interfaces and raw history); Grafana runs with `--disable-write` and only the dashboard, alerting, annotation, datasource and search tools.
-- **Tokens required** on both servers; every Zabbix call shows up in the Zabbix audit log as user `mcp`.
+`make mcp` creates a read-only Zabbix user `mcp` with an API token and a Grafana `mcp` service account (Viewer), generates the internal Grafana MCP token and `MCP_TOKEN`, stores them in `.env`, builds and starts the three containers, checks that requests without the token are refused and prints ready-to-paste client configs (`make mcp-config` prints them again).
+
+- **No exposed ports:** only `mcp-gateway` publishes a port, on `127.0.0.1`, regardless of `BIND_ADDRESS`. It also rejects foreign `Host`/`Origin` headers (DNS rebinding).
+- **One token for the assistant;** the Zabbix and Grafana tokens never leave the containers. The internal Grafana MCP still requires its own token.
+- **Read-only:** Zabbix exposes only `*_get` tools (minus item keys, macros, interfaces and raw history); Grafana runs with `--disable-write` and only the dashboard, alerting, annotation, datasource and search tools. Every Zabbix call shows up in the Zabbix audit log as user `mcp`.
+- On Zabbix 7.0 only the `grafana_*` tools are available.
 
 Claude Code:
 
 ```bash
-claude mcp add --transport http zabbix http://127.0.0.1:8443/mcp --header "Authorization: Bearer <ZABBIX_MCP_TOKEN>"
-claude mcp add --transport http grafana http://127.0.0.1:8000/mcp --header "Authorization: Bearer <GRAFANA_MCP_CLIENT_TOKEN>"
+claude mcp add --transport http zabbix-grafana http://127.0.0.1:8765/mcp --header "Authorization: Bearer <MCP_TOKEN>"
 ```
 
-Claude Desktop uses [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node.js); `make mcp-config` prints the `claude_desktop_config.json` block. ChatGPT and Claude on the web need a public HTTPS URL, which this local mode deliberately does not provide; OAuth plus an optional outbound tunnel is planned. MCP is Docker Compose only for now.
+Claude Desktop uses [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node.js); `make mcp-config` prints the `claude_desktop_config.json` block. ChatGPT and Claude on the web need a public HTTPS URL, which this local mode deliberately does not provide; OAuth plus an optional outbound tunnel is planned, as are cross-system tools (Zabbix, Grafana and Kubernetes) and a Kubernetes version. MCP is Docker Compose only for now.
 
 ## Kubernetes on Linux
 
