@@ -2,7 +2,7 @@
 
 [English version](README.en.md)
 
-Modelo pronto para subir um ambiente de monitoramento com **Zabbix** e **Grafana** em poucos minutos, tanto com **Docker Compose** quanto em **Kubernetes** (Kustomize). O Grafana já vem com o plugin do Zabbix instalado, a fonte de dados configurada, dashboards e regras de alerta prontos.
+Modelo pronto para subir um ambiente de monitoramento com **Zabbix** e **Grafana** em poucos minutos, tanto com **Docker Compose** quanto em **Kubernetes** (Kustomize). O Grafana já vem com o plugin do Zabbix instalado, a fonte de dados configurada, dashboards e regras de alerta prontos. O objetivo do projeto é facilitar a criação de monitoramentos em um ambiente seguro, escalável e com segurança.
 
 Use como ponto de partida para o seu laboratório, para estudos ou como base de um ambiente real.
 
