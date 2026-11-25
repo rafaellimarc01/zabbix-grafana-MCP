@@ -170,7 +170,7 @@ jobs:
           g -H 'Content-Type: application/json' -d @eval.json http://localhost:3000/api/v1/eval \
             | tee /dev/stderr | jq -e '[.results.A.frames[].schema.fields[] | select(.labels.host == "Zabbix server")] | length >= 1'
           # Toda regra é avaliada sem erro (espera a primeira avaliação, a cada 1 min)
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             g http://localhost:3000/api/prometheus/grafana/api/v1/rules > state.json
             n=$(jq '[.data.groups[].rules[] | select(.lastEvaluation > "2000")] | length' state.json)
             [ "$n" = 5 ] && break
