@@ -4,7 +4,7 @@
 
 Modelo pronto para subir um ambiente de monitoramento com **Zabbix** e **Grafana** em poucos minutos, tanto com **Docker Compose** quanto em **Kubernetes** (Kustomize). O Grafana já vem com o plugin do Zabbix instalado, a fonte de dados configurada e dashboards prontos. O objetivo do projeto é facilitar a criação de monitoramentos em um ambiente seguro, escalável e com segurança.
 
-Use como ponto de partida para o seu laboratório, para estudos ou como base de um ambiente real.
+Use como ponto de partida para o seu laboratório, para estudos ou como base de um ambiente real. A plataforma padrão é o **Linux**; macOS e Windows também funcionam (veja [Plataformas](#plataformas)).
 
 ## O que vem no pacote
 
@@ -53,41 +53,104 @@ Alertas incluídos (pasta **Zabbix** em **Alerting → Alert rules**): host indi
 └── Makefile                    # atalhos (make help)
 ```
 
+## Plataformas
+
+O ambiente foi feito para **Linux**, que é a plataforma padrão: os scripts são `sh`, os atalhos usam `make` e o CI sobe o ambiente completo (smoke test) no Ubuntu a cada mudança. Em produção, rode num servidor Linux.
+
+| Plataforma | Situação | Onde ler |
+|---|---|---|
+| **Linux** (Ubuntu, Debian, Fedora, RHEL e derivados) | **Padrão**, testado de ponta a ponta no CI | [Início rápido no Linux](#início-rápido-no-linux-padrão) |
+| macOS (Intel e Apple Silicon) | Alternativa, para estudo e testes; scripts testados no CI | [Usando no macOS](#usando-no-macos-intel-e-apple-silicon) |
+| Windows 10/11 | Alternativa, para estudo e testes; script PowerShell testado no CI | [Usando no Windows](#usando-no-windows) |
+
 ## Requisitos
 
-- **Docker:** Docker Engine 24+ com o plugin `docker compose` (ou Docker Desktop). No Mac, veja [Usando no macOS](#usando-no-macos-intel-e-apple-silicon); no Windows, [Usando no Windows](#usando-no-windows).
-- **Kubernetes:** um cluster 1.27+ com StorageClass padrão e `kubectl` 1.27+ (já traz o Kustomize).
+- **Docker:** Docker Engine 24+ com o plugin `docker compose`. No Mac e no Windows, o Docker Desktop.
+- **Ferramentas:** `git` e `make` (o `make` é opcional; todo atalho tem o comando equivalente).
+- **Kubernetes (opcional):** um cluster 1.27+ com StorageClass padrão e `kubectl` 1.27+ (já traz o Kustomize).
 - Mínimo recomendado: 2 vCPU e 4 GB de RAM.
 - Acesso à internet no primeiro start (o Grafana baixa o plugin do Zabbix de grafana.com).
 
-## Início rápido com Docker Compose
+## Início rápido no Linux (padrão)
+
+Passo a passo num Linux recém-instalado. Os comandos usam `apt` (Ubuntu e Debian); no Fedora, RHEL, Rocky e Alma, troque por `dnf`.
+
+### 1. Instale o Docker Engine, o git e o make
+
+Siga o guia oficial da sua distribuição: [Ubuntu](https://docs.docker.com/engine/install/ubuntu/), [Debian](https://docs.docker.com/engine/install/debian/), [Fedora](https://docs.docker.com/engine/install/fedora/) ou [RHEL](https://docs.docker.com/engine/install/rhel/). Ele instala o Docker Engine junto com o plugin `docker compose`. Para um laboratório, o script oficial resolve em um comando:
 
 ```bash
-git clone https://github.com/<seu-usuario>/zabbix-grafana-stack.git
-cd zabbix-grafana-stack
+curl -fsSL https://get.docker.com | sudo sh     # só para laboratório; em produção, use o guia da distribuição
+sudo systemctl enable --now docker              # sobe o Docker agora e a cada boot
 
-make env                  # gera o .env com senhas aleatórias (sem make: ./scripts/generate-secrets.sh)
-docker compose up -d
-docker compose ps -a      # zabbix-init deve aparecer como "Exited (0)"
+sudo apt install -y git make                    # Fedora/RHEL: sudo dnf install -y git make
 ```
 
-No Windows sem WSL, troque o `make env` pelo script PowerShell (veja [Usando no Windows](#usando-no-windows)).
+Confira as versões:
 
-Ou tudo de uma vez: `make up` (gera o `.env` se não existir e confere as senhas). As senhas ficam no `.env`; guarde-as num cofre.
+```bash
+docker --version            # 24 ou mais nova
+docker compose version      # precisa responder; se der "unknown command", falta o plugin compose
+```
 
-Depois de 1 a 2 minutos:
+> Evite o pacote `docker.io` da distribuição e o antigo `docker-compose` (com hífen): costumam vir desatualizados e sem o plugin `docker compose`. Os pacotes `docker-ce` e `docker-compose-plugin` do repositório oficial do Docker são os testados aqui.
+
+### 2. Use o Docker sem sudo (opcional)
+
+Por padrão, só o root fala com o Docker. Para rodar `docker` e `make` com o seu usuário:
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker               # vale para este terminal; nos outros, saia e entre de novo na sessão
+docker run --rm hello-world # deve funcionar sem sudo
+```
+
+> Quem está no grupo `docker` tem, na prática, poder de root na máquina. Num servidor compartilhado, prefira continuar com `sudo` ou use o [modo rootless do Docker](https://docs.docker.com/engine/security/rootless/).
+
+### 3. Clone o repositório
+
+```bash
+mkdir -p ~/projetos && cd ~/projetos
+git clone https://github.com/<seu-usuario>/zabbix-grafana-stack.git
+cd zabbix-grafana-stack
+```
+
+### 4. Gere as senhas
+
+```bash
+make env                    # cria o .env com senhas aleatórias (sem make: ./scripts/generate-secrets.sh)
+```
+
+O `.env` é criado com permissão `600` (só o seu usuário lê) e nunca é sobrescrito. As senhas ficam nele; guarde-as num cofre.
+
+### 5. Suba o ambiente
+
+```bash
+make up                     # gera o .env se faltar, confere as senhas e roda docker compose up -d
+docker compose ps -a        # zabbix-admin-password e zabbix-init devem aparecer como "Exited (0)"
+```
+
+O primeiro start leva de 1 a 2 minutos (o Zabbix cria o banco e o Grafana baixa o plugin). Para acompanhar: `make logs`.
+
+### 6. Acesse
 
 | Serviço | Endereço | Usuário | Senha |
 |---|---|---|---|
 | Zabbix | http://localhost:8080 | `Admin` | `ZABBIX_ADMIN_PASSWORD` do `.env` |
 | Grafana | http://localhost:3000 | `GRAFANA_ADMIN_USER` | `GRAFANA_ADMIN_PASSWORD` do `.env` |
-| Zabbix trapper (agentes externos) | `<ip-do-host>:10051` | | |
+| Zabbix trapper (agentes externos) | `<ip-do-servidor>:10051` | | |
 
-> Por segurança, o Zabbix web e o Grafana só aceitam conexões do próprio computador (`127.0.0.1`), porque falam HTTP sem criptografia. Para acessar de outra máquina, coloque um proxy reverso com HTTPS na frente ou mude `BIND_ADDRESS=0.0.0.0` no `.env`, ciente de que as senhas vão trafegar sem TLS.
+Para ver as senhas: `grep -E 'ADMIN_(USER|PASSWORD)' .env`.
+
+> Por segurança, o Zabbix web e o Grafana só aceitam conexões do próprio computador (`127.0.0.1`), porque falam HTTP sem criptografia. Num servidor sem interface gráfica, abra um túnel SSH a partir do seu computador (`ssh -L 8080:localhost:8080 -L 3000:localhost:3000 usuario@servidor`) e acesse os mesmos endereços acima. Para acesso direto pela rede, coloque um proxy reverso com HTTPS na frente ou mude `BIND_ADDRESS=0.0.0.0` no `.env`, ciente de que as senhas vão trafegar sem TLS.
 
 > Se preencher as senhas à mão: mínimo de 12 caracteres, e a do Admin do Zabbix **não pode conter** "Admin" nem "Zabbix" (regra do próprio Zabbix). Se algo falhar no primeiro start, veja `docker compose logs zabbix-admin-password zabbix-init`.
 
 > A senha padrão `zabbix` do Admin é trocada direto no banco **antes** de a interface web subir (serviço `zabbix-admin-password`). Assim o Admin nunca fica acessível com a senha padrão, nem por alguns segundos.
+
+### 7. Monitore o próprio servidor (opcional)
+
+O container `zabbix-agent` monitora o próprio container, não o Linux onde o Docker roda. Para monitorar o servidor, instale o Zabbix Agent 2 nele pelo [repositório oficial do Zabbix](https://www.zabbix.com/download?zabbix=7.0&components=agent_2) e, no `/etc/zabbix/zabbix_agent2.conf`, use `Server=127.0.0.1,172.16.0.0/12` (as redes do Docker) e `ServerActive=127.0.0.1:10051`. Depois cadastre o host no Zabbix com o IP do servidor na rede local, porta `10050`, e o template **Linux by Zabbix agent** (veja [Monitorando seus servidores](#monitorando-seus-servidores)). Se o firewall do host bloquear a porta 10050, libere-a para `172.16.0.0/12`.
 
 ### Comandos úteis
 
@@ -99,14 +162,45 @@ make down     # para tudo, mantendo os dados
 make reset    # para e APAGA os volumes (começa do zero)
 ```
 
-## Usando no macOS (Intel e Apple Silicon)
+O ambiente volta sozinho depois de um reboot (os containers usam `restart: unless-stopped` e o Docker sobe com o sistema por causa do `systemctl enable`).
+
+### Kubernetes no Linux
+
+Para testar os manifests numa máquina Linux, qualquer um destes clusters serve. Todos já vêm com uma StorageClass padrão.
+
+| Cluster | Bom para | Acesso com o overlay `local` |
+|---|---|---|
+| [k3s](https://docs.k3s.io/quick-start) | Um servidor Linux de verdade (leve, já traz o Traefik para o overlay `ingress`) | `http://<ip-do-servidor>:30080` e `:30300` |
+| [kind](https://kind.sigs.k8s.io/docs/user/quick-start/) | Testes rápidos e CI, roda dentro do Docker | port-forward (abaixo) |
+| [minikube](https://minikube.sigs.k8s.io/docs/start/) | Estudo, com addons prontos | `http://$(minikube ip):30080` e `:30300` |
+
+Exemplo com o k3s, do zero:
+
+```bash
+curl -sfL https://get.k3s.io | sh -                       # instala o k3s como serviço (já traz o kubectl)
+mkdir -p ~/.kube
+sudo k3s kubectl config view --raw > ~/.kube/config       # deixa o kubectl usar o k3s sem sudo
+chmod 600 ~/.kube/config
+
+make k8s-secrets                                          # gera kubernetes/base/secrets.env
+kubectl apply -k kubernetes/overlays/local
+kubectl -n monitoring get pods -w                         # espere todos ficarem Running/Completed
+```
+
+Com o kind: `kind create cluster`, depois os mesmos `make k8s-secrets` e `kubectl apply -k kubernetes/overlays/local`, e acesse por port-forward. Os detalhes dos overlays e do acesso estão em [Início rápido com Kubernetes](#início-rápido-com-kubernetes).
+
+## Outras plataformas
+
+O Linux é o caminho padrão. As seções abaixo explicam o que muda para usar o modelo no Mac ou no Windows, normalmente em estudo e testes.
+
+### Usando no macOS (Intel e Apple Silicon)
 
 O modelo funciona igual no Mac. Todas as imagens (Zabbix, Grafana e PostgreSQL) têm versão nativa para `arm64`, então nos Macs M1/M2/M3/M4 nada roda emulado.
 
 1. Instale o [Docker Desktop para Mac](https://docs.docker.com/desktop/setup/install/mac-install/) (ou [OrbStack](https://orbstack.dev) / [Colima](https://github.com/abiosoft/colima)). Em **Settings → Resources**, deixe pelo menos 4 GB de memória para o Docker.
 2. Instale o `make` e o `git` com as ferramentas de linha de comando da Apple: `xcode-select --install`. Os scripts usam só comandos que já vêm no macOS (testado no CI em `macos-latest`).
 3. Clone o repositório **dentro da sua pasta de usuário** (ex.: `~/projetos`). O Docker Desktop só compartilha `/Users`, `/Volumes`, `/private` e `/tmp` com os containers; fora disso o Grafana e o `zabbix-init` falham com `mounts denied`. Para usar outra pasta, adicione-a em **Settings → Resources → File sharing**.
-4. Siga o [início rápido](#início-rápido-com-docker-compose) normalmente: `make up`.
+4. Siga o [início rápido](#início-rápido-no-linux-padrão) a partir do passo 3 (clonar): `make up`.
 
 Bom saber:
 
@@ -115,11 +209,11 @@ Bom saber:
 - Para o Kubernetes, o cluster do Docker Desktop (**Settings → Kubernetes**) serve: com o overlay `local`, os NodePorts ficam em `http://localhost:30080` e `http://localhost:30300`. Ele não aplica NetworkPolicies, então use só para testes.
 - Para rodar o `make validate`: `brew install shellcheck yamllint kubectl`.
 
-## Usando no Windows
+### Usando no Windows
 
 O modelo funciona no Windows 10/11 com o [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) (backend WSL 2). Há dois caminhos:
 
-**Com WSL (recomendado).** Abra o terminal do Ubuntu (WSL), clone o repositório dentro do Linux (ex.: `~/projetos`, não em `/mnt/c/...`, que é bem mais lento) e siga o [início rápido](#início-rápido-com-docker-compose) normalmente, com `make`. Instale o `make` se faltar: `sudo apt install make`.
+**Com WSL (recomendado).** Abra o terminal do Ubuntu (WSL), clone o repositório dentro do Linux (ex.: `~/projetos`, não em `/mnt/c/...`, que é bem mais lento) e siga o [início rápido](#início-rápido-no-linux-padrão) normalmente, com `make`. Instale o `make` se faltar: `sudo apt install make`.
 
 **Só com PowerShell (sem WSL e sem `make`).** O `make` e os scripts `.sh` não rodam no PowerShell nem no CMD, então use o script PowerShell para gerar as senhas:
 
@@ -159,7 +253,7 @@ Tudo é criado no namespace `monitoring`.
 ```bash
 make k8s-secrets          # gera kubernetes/base/secrets.env com senhas aleatórias
 
-# Cluster local (kind, minikube, k3d, Docker Desktop): expõe NodePorts
+# Cluster local (k3s, kind, minikube, k3d, Docker Desktop): expõe NodePorts
 kubectl apply -k kubernetes/overlays/local
 
 # Produção, com Gateway API (recomendado): edite a classe e os domínios em
@@ -386,6 +480,8 @@ O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem ca
 | Host "Zabbix server" fica vermelho (ZBX) por alguns minutos | Normal no primeiro start; o Zabbix tenta de novo a cada minuto |
 | Painéis do Grafana sem dados | Confira em **Connections → Data sources → Zabbix → Save & test** |
 | Hosts de um grupo novo não aparecem no Grafana | Rode `docker compose up zabbix-init` para dar leitura ao usuário `grafana` no grupo novo |
+| No Linux, `permission denied while trying to connect to the Docker daemon socket` | Seu usuário não está no grupo `docker`; use `sudo` ou veja o [passo 2](#2-use-o-docker-sem-sudo-opcional) |
+| No Linux, `docker: 'compose' is not a docker command` | Falta o plugin compose; instale o `docker-compose-plugin` pelo [passo 1](#1-instale-o-docker-engine-o-git-e-o-make) |
 | `make up` diz que a senha é de exemplo ou curta | Apague o `.env` e rode `make env` de novo (ou ajuste a senha à mão) |
 | No Mac, `mounts denied` ou `path is not shared` ao subir | A pasta do repositório está fora de `/Users`; mova-a ou libere em **Docker Desktop → Settings → Resources → File sharing** |
 | No Windows, `make` ou `./scripts/...` não são reconhecidos | Use o WSL ou os comandos de [Usando no Windows](#usando-no-windows) |
@@ -396,7 +492,7 @@ O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem ca
 
 ## Contribuindo
 
-Issues e pull requests são bem-vindos. Antes de abrir um PR, rode `make validate` (precisa de `docker`, `kubectl` e `yamllint`).
+Issues e pull requests são bem-vindos. Antes de abrir um PR, rode `make validate` (precisa de `docker`, `kubectl`, `shellcheck` e `yamllint`; no Ubuntu/Debian: `sudo apt install -y shellcheck yamllint`, e o `kubectl` pelo [guia oficial](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/)).
 
 Abra o PR para a branch `develop`, nunca para a `main`. A `main` só recebe a `develop` (o CI recusa PR de outra branch para a `main`), e as duas branches são protegidas: nada de push direto, e o merge só sai com o CI verde.
 
