@@ -91,7 +91,7 @@ jobs:
         run: |
           ./scripts/generate-secrets.sh k8s
           mkdir -p rendered
-          for o in local ingress; do
+          for o in local ingress gateway; do
             kubectl kustomize "kubernetes/overlays/$o" > "rendered/$o.yaml"
           done
 

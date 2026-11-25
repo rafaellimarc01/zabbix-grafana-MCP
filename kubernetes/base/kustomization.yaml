@@ -17,7 +17,6 @@ resources:
   - zabbix-server.yaml
   - zabbix-web.yaml
   - zabbix-agent.yaml
-  - zabbix-init-job.yaml
   - grafana.yaml
   - networkpolicies.yaml
 
@@ -43,6 +42,9 @@ configMapGenerator:
   - name: zabbix-init-script
     files:
       - files/zabbix-init.sh
+  - name: zabbix-admin-password-script
+    files:
+      - files/zabbix-admin-password.sh
   - name: postgres-backup-script
     files:
       - files/postgres-backup.sh

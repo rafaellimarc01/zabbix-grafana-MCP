@@ -1,0 +1,48 @@
+# Libera o Zabbix web (8080) e o Grafana (3000) só para o controlador de
+# entrada (Gateway API ou Ingress), e não para qualquer pod do cluster.
+#
+# Aceita conexões vindas de:
+#  - namespaces onde os controladores mais comuns ficam por padrão (lista
+#    abaixo; o k3s roda o Traefik no kube-system);
+#  - qualquer namespace com o rótulo zabbix-grafana/ingress-controller=true.
+#    Se o seu controlador estiver em outro namespace, rotule-o:
+#      kubectl label namespace <namespace> zabbix-grafana/ingress-controller=true
+#  - pods do próprio namespace criados para o Gateway "zabbix-grafana"
+#    (ex.: Istio, que sobe o proxy no namespace do Gateway).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-ingress-controller
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [zabbix-web, grafana]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  - envoy-gateway-system
+                  - traefik
+                  - kube-system
+                  - nginx-gateway
+                  - istio-ingress
+                  - istio-system
+                  - haproxy-controller
+                  - ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              zabbix-grafana/ingress-controller: "true"
+        - podSelector:
+            matchLabels:
+              gateway.networking.k8s.io/gateway-name: zabbix-grafana
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 3000
+          protocol: TCP

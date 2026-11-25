@@ -39,16 +39,16 @@ k8s-secrets: ## Gera kubernetes/base/secrets.env com senhas aleatórias (não so
 	@./scripts/generate-secrets.sh k8s
 	@./scripts/check-secrets.sh kubernetes/base/secrets.env
 
-k8s-render: k8s-secrets ## Mostra os manifests gerados (K8S_OVERLAY=local|ingress)
+k8s-render: k8s-secrets ## Mostra os manifests gerados (K8S_OVERLAY=local|gateway|ingress)
 	kubectl kustomize kubernetes/overlays/$(K8S_OVERLAY)
 
-k8s-apply: k8s-secrets ## Aplica no cluster atual (K8S_OVERLAY=local|ingress)
+k8s-apply: k8s-secrets ## Aplica no cluster atual (K8S_OVERLAY=local|gateway|ingress)
 	kubectl apply -k kubernetes/overlays/$(K8S_OVERLAY)
 
 k8s-delete: ## Remove do cluster (os PVCs do PostgreSQL ficam)
 	kubectl delete -k kubernetes/overlays/$(K8S_OVERLAY)
 
-sync-k8s: ## Copia grafana/ e o script de init para kubernetes/base/files
+sync-k8s: ## Copia grafana/ e os scripts para kubernetes/base/files
 	./scripts/sync-k8s-files.sh
 
 validate: k8s-secrets ## Valida compose, kustomize, YAML e scripts
@@ -56,5 +56,5 @@ validate: k8s-secrets ## Valida compose, kustomize, YAML e scripts
 	docker compose --env-file .env.validate config -q
 	shellcheck scripts/*.sh
 	./scripts/sync-k8s-files.sh --check
-	@for o in local ingress; do kubectl kustomize kubernetes/overlays/$$o >/dev/null && echo "kustomize $$o ok"; done
+	@for o in local ingress gateway; do kubectl kustomize kubernetes/overlays/$$o >/dev/null && echo "kustomize $$o ok"; done
 	yamllint -s .

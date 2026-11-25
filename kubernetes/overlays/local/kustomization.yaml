@@ -1,6 +1,6 @@
 # Para testes locais (kind, minikube, k3d, Docker Desktop):
 # expõe os serviços em NodePorts, em HTTP sem TLS e em todos os nós.
-# Não use em clusters acessíveis pela rede; prefira o overlay "ingress".
+# Não use em clusters acessíveis pela rede; prefira o overlay "gateway".
 #   Zabbix web  -> http://<ip-do-nó>:30080
 #   Grafana     -> http://<ip-do-nó>:30300
 #   Zabbix trapper (agentes externos) -> <ip-do-nó>:30051
@@ -9,6 +9,7 @@ kind: Kustomization
 
 resources:
   - ../../base
+  - networkpolicy.yaml
 
 patches:
   - target: {kind: Service, name: zabbix-web}

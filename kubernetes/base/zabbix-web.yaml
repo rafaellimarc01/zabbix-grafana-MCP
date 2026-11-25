@@ -35,6 +35,44 @@ spec:
         runAsGroup: 1995
         seccompProfile:
           type: RuntimeDefault
+      # Troca a senha padrão ("zabbix") do Admin direto no banco antes de a
+      # interface web subir: o Admin nunca fica exposto com a senha padrão
+      # pelo NodePort/Ingress, mesmo que o init do Grafana falhe depois.
+      initContainers:
+        - name: zabbix-admin-password
+          image: postgres
+          command: ["/bin/sh", "/scripts/zabbix-admin-password.sh"]
+          securityContext:
+            runAsUser: 70
+            runAsGroup: 70
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef: {name: zabbix-config, key: DB_SERVER_HOST}
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef: {name: zabbix-config, key: POSTGRES_DB}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: POSTGRES_USER}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: POSTGRES_PASSWORD}
+            - name: ZABBIX_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_ADMIN_PASSWORD}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - name: admin-password-script
+              mountPath: /scripts
+            - name: tmp
+              mountPath: /tmp
       containers:
         - name: zabbix-web
           image: zabbix/zabbix-web-nginx-pgsql
@@ -78,3 +116,9 @@ spec:
           resources:
             requests: {cpu: 50m, memory: 128Mi}
             limits: {memory: 512Mi}
+      volumes:
+        - name: admin-password-script
+          configMap:
+            name: zabbix-admin-password-script
+        - name: tmp
+          emptyDir: {}
