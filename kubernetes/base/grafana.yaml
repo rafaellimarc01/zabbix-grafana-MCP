@@ -131,6 +131,32 @@ spec:
             - name: ZABBIX_PASSWORD
               valueFrom:
                 secretKeyRef: {name: zabbix-secrets, key: ZABBIX_GRAFANA_PASSWORD}
+            # Notificações dos alertas (opcional; veja "Alertas" no README).
+            # As chaves vêm do secrets.env e podem faltar (optional: true).
+            - name: GF_SERVER_ROOT_URL
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_ROOT_URL, optional: true}
+            - name: GF_SMTP_ENABLED
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_SMTP_ENABLED, optional: true}
+            - name: GF_SMTP_HOST
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_SMTP_HOST, optional: true}
+            - name: GF_SMTP_USER
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_SMTP_USER, optional: true}
+            - name: GF_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_SMTP_PASS, optional: true}
+            - name: GF_SMTP_FROM_ADDRESS
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_SMTP_FROM, optional: true}
+            - name: ALERT_EMAIL_TO
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: ALERT_EMAIL_TO, optional: true}
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: TELEGRAM_BOT_TOKEN, optional: true}
           readinessProbe:
             httpGet:
               path: /api/health
@@ -155,6 +181,8 @@ spec:
               mountPath: /etc/grafana/provisioning/plugins
             - name: dashboard-providers
               mountPath: /etc/grafana/provisioning/dashboards
+            - name: alerting
+              mountPath: /etc/grafana/provisioning/alerting
             - name: dashboards
               mountPath: /var/lib/grafana/dashboards
             - name: tmp
@@ -171,5 +199,7 @@ spec:
           configMap: {name: grafana-plugins}
         - name: dashboard-providers
           configMap: {name: grafana-dashboard-providers}
+        - name: alerting
+          configMap: {name: grafana-alerting}
         - name: dashboards
           configMap: {name: grafana-dashboards}

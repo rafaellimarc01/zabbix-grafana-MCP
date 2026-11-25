@@ -23,12 +23,15 @@ Dashboards incluídos (pasta **Zabbix** no Grafana):
 - **Zabbix - Visão geral dos hosts**: problemas ativos, CPU, memória, load, rede e disco, com filtro por grupo e host.
 - **Zabbix - Saúde do servidor**: valores processados por segundo, filas e uso dos processos internos do Zabbix.
 
+Alertas incluídos (pasta **Zabbix** em **Alerting → Alert rules**): host indisponível, CPU alta, memória alta, disco quase cheio e fila do Zabbix acumulada. Veja [Alertas](#alertas).
+
 ```
 .
 ├── docker-compose.yml          # ambiente completo com Docker
 ├── .env.example                # variáveis (as senhas são geradas por make env)
 ├── grafana/
-│   ├── provisioning/           # plugin, datasource e provedor de dashboards
+│   ├── provisioning/           # plugin, datasource, dashboards e regras de alerta
+│   ├── alerting-examples/      # notificação por e-mail ou Telegram (ative um)
 │   └── dashboards/             # JSON dos dashboards (adicione os seus aqui)
 ├── kubernetes/
 │   ├── base/                   # manifests (Kustomize)
@@ -243,6 +246,46 @@ Hostname=<nome-do-host>
 Depois cadastre o host no Zabbix (**Coleta de dados → Hosts → Criar host**) com o template **Linux by Zabbix agent** (ou **Windows by Zabbix agent**). Ele aparece sozinho no dashboard do Grafana, no filtro de grupo e host.
 
 Para monitorar o próprio cluster Kubernetes (nós, pods, API), use a [integração oficial do Zabbix com Kubernetes](https://www.zabbix.com/integrations/kubernetes) (Helm chart) junto com este ambiente.
+
+## Alertas
+
+O Grafana já sobe com 5 regras de alerta prontas, em `grafana/provisioning/alerting/zabbix-rules.yaml`. Elas leem os dados do Zabbix e valem para todo host com os templates padrão (**Linux by Zabbix agent** e **Zabbix server health**), gerando um alerta separado por host (e por disco):
+
+| Regra | Item do Zabbix | Dispara quando | Severidade |
+|---|---|---|---|
+| Host indisponível | `Zabbix agent availability` | agente indisponível por 3 min | `critical` |
+| CPU alta | `CPU utilization` | média de 10 min acima de 90% por 5 min | `warning` |
+| Memória alta | `Memory utilization` | média de 10 min acima de 90% por 5 min | `warning` |
+| Disco quase cheio | `FS [*]: Space: Used, in %` | acima de 90% por 10 min | `warning` |
+| Fila do Zabbix acumulada | `Queue over 10 minutes` | mais de 100 itens atrasados por 10 min | `warning` |
+
+Se o Grafana não conseguir consultar o Zabbix, as regras também alertam (estado `Error`), para a falha não passar em branco.
+
+Sem configurar nada, os alertas aparecem só na tela do Grafana (**Alerting → Alert rules**). Para receber notificações, ative **um** dos exemplos de `grafana/alerting-examples/`:
+
+**E-mail**
+
+1. No `.env`, preencha `GRAFANA_SMTP_HOST` (ex.: `smtp.gmail.com:587`), `GRAFANA_SMTP_USER`, `GRAFANA_SMTP_PASS`, `GRAFANA_SMTP_FROM` e `ALERT_EMAIL_TO` (vários destinatários separados por `;`), e mude `GRAFANA_SMTP_ENABLED=true`.
+2. `cp grafana/alerting-examples/email.yaml grafana/provisioning/alerting/`
+3. `docker compose up -d grafana`
+
+**Telegram**
+
+1. Crie um bot com o [@BotFather](https://t.me/BotFather), adicione-o ao grupo e descubra o id do chat em `https://api.telegram.org/bot<TOKEN>/getUpdates`.
+2. No `.env`, preencha `TELEGRAM_BOT_TOKEN`.
+3. `cp grafana/alerting-examples/telegram.yaml grafana/provisioning/alerting/` e, na cópia, troque `COLOQUE_O_CHAT_ID_AQUI` pelo id do chat (entre aspas; o Grafana não aceita esse id vindo de variável de ambiente).
+4. `docker compose up -d grafana`
+
+Preencha `GRAFANA_ROOT_URL` com o endereço em que você abre o Grafana, para os links das notificações funcionarem. As cópias ativadas (`email.yaml` e `telegram.yaml` dentro de `grafana/provisioning/alerting/`) estão no `.gitignore`, para o id do seu chat não ir parar no GitHub.
+
+**No Kubernetes:** preencha as mesmas variáveis no `kubernetes/base/secrets.env` (veja o `secrets.env.example`), copie o exemplo para `grafana/provisioning/alerting/`, acrescente o arquivo na lista do `configMapGenerator` `grafana-alerting` em `kubernetes/base/kustomization.yaml`, rode `./scripts/sync-k8s-files.sh` e `kubectl apply -k` de novo.
+
+**Ajustes:**
+
+- **Limites:** mude o número em `params` do passo `C` de cada regra e reinicie o Grafana. Regras provisionadas não podem ser editadas pela tela; para testar outro limite antes, duplique a regra no Grafana.
+- **Desligar uma regra:** `isPaused: true` na regra.
+- **Trocar de contato:** ao tirar um exemplo de `grafana/provisioning/alerting/`, o contato antigo continua salvo no banco do Grafana. Apague-o em **Alerting → Contact points** depois de remover a política, ou use `deleteContactPoints` no arquivo (veja a [documentação do Grafana](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/)).
+- Os triggers do próprio Zabbix continuam funcionando; os alertas do Grafana são uma camada a mais, útil para quem já centraliza notificações no Grafana.
 
 ## Personalizando
 
