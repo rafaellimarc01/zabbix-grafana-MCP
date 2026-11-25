@@ -1,0 +1,14 @@
+# Recomendado para produção: Gateway API (o sucessor do Ingress), com HTTPS e
+# redirecionamento de HTTP para HTTPS.
+# Precisa de um controlador de Gateway API no cluster (Envoy Gateway, Traefik,
+# Cilium, Istio, NGINX Gateway Fabric...). Antes de aplicar, troque em
+# gateway.yaml o gatewayClassName e os domínios.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - gateway.yaml
+
+components:
+  - ../../components/external-access

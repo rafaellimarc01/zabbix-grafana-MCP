@@ -11,12 +11,16 @@ make env                 # creates .env with random passwords (or ./scripts/gene
 docker compose up -d
 ```
 
+On Windows without WSL (no `make`, no `sh`), create the `.env` with PowerShell instead: `powershell -ExecutionPolicy Bypass -File scripts\generate-secrets.ps1` (add `-Target k8s` for Kubernetes). The Portuguese README, section "Usando no Windows", lists PowerShell equivalents for every `make` shortcut.
+
 - Zabbix: http://localhost:8080 (user `Admin`, password `ZABBIX_ADMIN_PASSWORD` from `.env`)
 - Grafana: http://localhost:3000 (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from `.env`)
 
 The web UIs listen on `127.0.0.1` only, since they speak plain HTTP. To reach them from another machine, put an HTTPS reverse proxy in front or set `BIND_ADDRESS=0.0.0.0` in `.env`.
 
-A one-shot `zabbix-init` container replaces the default Admin password, creates a read-only, API-only `grafana` user that Grafana uses to query Zabbix, and points the built-in "Zabbix server" host to the agent container.
+A one-shot `zabbix-admin-password` container replaces the default Admin password directly in the database before the web UI starts, so Admin is never reachable with `zabbix`. Then a one-shot `zabbix-init` container creates a read-only, API-only `grafana` user that Grafana uses to query Zabbix, and points the built-in "Zabbix server" host to the agent container.
+
+Port 10051 (trapper) listens on all interfaces for active agents. Docker-published ports bypass UFW/firewalld, so filter it in the `DOCKER-USER` iptables chain or set `ZABBIX_SERVER_BIND_ADDRESS`, and enable PSK encryption per host (see "Protegendo a porta 10051" in the Portuguese README).
 
 ### macOS
 
@@ -27,11 +31,15 @@ Works on Intel and Apple Silicon Macs: every image has a native `arm64` build. I
 ```bash
 make k8s-secrets   # creates kubernetes/base/secrets.env with random passwords
 kubectl apply -k kubernetes/overlays/local     # NodePorts 30080 (Zabbix), 30300 (Grafana), 30051 (trapper)
-# or
-kubectl apply -k kubernetes/overlays/ingress   # HTTPS; edit hosts in ingress.yaml first
+# or, recommended for production (Gateway API, HTTPS only):
+kubectl apply -k kubernetes/overlays/gateway   # set gatewayClassName and hosts in gateway.yaml first
+# or, with an Ingress controller (Traefik by default, HTTPS only):
+kubectl apply -k kubernetes/overlays/ingress   # edit class, annotations and hosts in ingress.yaml first
 ```
 
-Everything goes into the `monitoring` namespace. `kubernetes/base/files/` holds a copy of `grafana/` and the init script because Kustomize cannot read files outside its folder; run `./scripts/sync-k8s-files.sh` after changing them.
+ingress-nginx was retired in March 2026 and no longer gets security fixes, so the overlays no longer use it. In the `gateway` and `ingress` overlays, NetworkPolicies only let the ingress controller reach Zabbix web and Grafana; if your controller runs in a namespace that is not in `kubernetes/components/external-access/networkpolicy.yaml`, label it with `zabbix-grafana/ingress-controller=true`.
+
+Everything goes into the `monitoring` namespace. The default Admin password is replaced by an init container of `zabbix-web`; the rest of the setup runs as an init container of Grafana on every pod start, so `kubectl apply -k` can be repeated safely. `kubernetes/base/files/` holds a copy of `grafana/` and the scripts because Kustomize cannot read files outside its folder; run `./scripts/sync-k8s-files.sh` after changing them.
 
 ## Database backups
 
@@ -58,7 +66,7 @@ Set `GRAFANA_ROOT_URL` so links in notifications work. Enabled copies are git-ig
 
 ## Security
 
-No default passwords, non-root containers with all capabilities dropped, an isolated database, a read-only Zabbix user for Grafana, NetworkPolicies, Pod Security `baseline`, and TLS in the `ingress` overlay. See [SECURITY.md](SECURITY.md) (Portuguese) for the full list, what is still up to you, and how to report a vulnerability.
+No default passwords, non-root containers with all capabilities dropped, an isolated database, a read-only Zabbix user for Grafana, NetworkPolicies, Pod Security `baseline`, and TLS in the `gateway` and `ingress` overlays. See [SECURITY.md](SECURITY.md) (Portuguese) for the full list, what is still up to you, and how to report a vulnerability.
 
 See the Portuguese README for details on monitoring your own servers, customization and troubleshooting. Run `make help` for shortcuts and `make validate` before opening a PR.
 
