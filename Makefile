@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 K8S_OVERLAY ?= local
 
-.PHONY: help env check-env up down logs ps reset backup backup-list upgrade-8 k8s-secrets k8s-render k8s-apply k8s-delete sync-k8s validate
+.PHONY: help env check-env up down logs ps reset backup backup-list upgrade-8 mcp mcp-config k8s-secrets k8s-render k8s-apply k8s-delete sync-k8s validate
 
 help: ## Mostra esta ajuda
 	@# Regex sem "*?" (não guloso), que o grep/awk do macOS (BSD) não aceitam.
@@ -34,6 +34,12 @@ backup-list: ## Lista os backups do banco
 
 upgrade-8: ## Atualiza do Zabbix 7.0 para o 8.0 (faz backup antes; veja o README)
 	./scripts/upgrade-zabbix-8.sh
+
+mcp: ## Sobe os MCPs do Zabbix e do Grafana (só em 127.0.0.1) e mostra como conectar as IAs
+	./scripts/mcp-setup.sh
+
+mcp-config: ## Mostra de novo como conectar o Claude e outras IAs aos MCPs
+	@./scripts/mcp-setup.sh config
 
 reset: ## APAGA tudo, inclusive volumes/dados
 	docker compose down -v

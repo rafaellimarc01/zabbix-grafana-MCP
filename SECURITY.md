@@ -47,6 +47,19 @@ aos respectivos projetos.
   sem snapshots externos, sem Gravatar e sem telemetria. Cookie `SameSite=strict`
   e, atrás de HTTPS (overlays `gateway` e `ingress`), cookie `Secure`.
 
+**MCP (opcional, make mcp)**
+- Os servidores MCP do Zabbix e do Grafana só escutam em `127.0.0.1`, mesmo
+  com `BIND_ADDRESS=0.0.0.0`.
+- Somente leitura: no Zabbix só as ferramentas `*_get`, sem as que devolvem
+  chaves de itens, macros, interfaces e histórico bruto; no Grafana,
+  `--disable-write` e só ferramentas de dashboards, alertas, anotações,
+  datasources e busca.
+- Usuário `mcp` próprio no Zabbix (tipo User, sem interface web, auditado) e
+  service account `mcp` Viewer no Grafana. Os dois exigem token; os tokens
+  ficam no `.env` (permissão 600, fora do Git).
+- Fica com você: não expor essas portas na rede e não colar os tokens em
+  chats ou prints.
+
 **CI**
 - Token do GitHub só com leitura, Actions fixadas por SHA e atualizadas pelo
   Dependabot, binários baixados conferidos por SHA-256.
