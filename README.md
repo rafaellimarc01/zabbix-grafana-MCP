@@ -1,4 +1,4 @@
-# zabbix-grafana-MCP: ambiente pronto de Zabbix + Grafana (Docker e Kubernetes)
+# Monitoramento com MCP: ambiente pronto de Zabbix + Grafana com uso de Docker e Kubernetes e IA opcional.
 
 [English version](README.en.md)
 
