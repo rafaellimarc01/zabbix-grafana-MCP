@@ -1,4 +1,4 @@
-# Zabbix + Grafana: ready-to-use stack (Docker and Kubernetes)
+# zabbix-grafana-MCP: ready-to-use Zabbix + Grafana stack (Docker and Kubernetes)
 
 [Versão em português](README.md)
 
@@ -29,8 +29,8 @@ Commands use `apt` (Ubuntu, Debian); on Fedora, RHEL, Rocky or Alma use `dnf`. Y
 
    ```bash
    mkdir -p ~/projects && cd ~/projects
-   git clone https://github.com/<your-user>/zabbix-grafana-stack.git
-   cd zabbix-grafana-stack
+   git clone https://github.com/<your-user>/zabbix-grafana-MCP.git
+   cd zabbix-grafana-MCP
    ```
 
 4. **Generate passwords:** `make env` creates `.env` (mode `600`, never overwritten) with random passwords (without make: `./scripts/generate-secrets.sh`).

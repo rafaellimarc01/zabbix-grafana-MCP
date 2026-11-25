@@ -1,4 +1,4 @@
-# Zabbix + Grafana: ambiente pronto (Docker e Kubernetes)
+# zabbix-grafana-MCP: ambiente pronto de Zabbix + Grafana (Docker e Kubernetes)
 
 [English version](README.en.md)
 
@@ -111,8 +111,8 @@ docker run --rm hello-world # deve funcionar sem sudo
 
 ```bash
 mkdir -p ~/projetos && cd ~/projetos
-git clone https://github.com/<seu-usuario>/zabbix-grafana-stack.git
-cd zabbix-grafana-stack
+git clone https://github.com/<seu-usuario>/zabbix-grafana-MCP.git
+cd zabbix-grafana-MCP
 ```
 
 ### 4. Gere as senhas
@@ -218,8 +218,8 @@ O modelo funciona no Windows 10/11 com o [Docker Desktop](https://docs.docker.co
 **Só com PowerShell (sem WSL e sem `make`).** O `make` e os scripts `.sh` não rodam no PowerShell nem no CMD, então use o script PowerShell para gerar as senhas:
 
 ```powershell
-git clone https://github.com/<seu-usuario>/zabbix-grafana-stack.git
-cd zabbix-grafana-stack
+git clone https://github.com/<seu-usuario>/zabbix-grafana-MCP.git
+cd zabbix-grafana-MCP
 
 powershell -ExecutionPolicy Bypass -File scripts\generate-secrets.ps1   # gera o .env com senhas aleatórias
 docker compose up -d
