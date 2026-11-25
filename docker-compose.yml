@@ -218,6 +218,17 @@ services:
       ZABBIX_URL: http://zabbix-web:8080/api_jsonrpc.php
       ZABBIX_USER: grafana
       ZABBIX_PASSWORD: ${ZABBIX_GRAFANA_PASSWORD:?defina ZABBIX_GRAFANA_PASSWORD no .env (rode make env)}
+      # Notificações dos alertas (opcional). Só são usadas se você ativar um
+      # exemplo de grafana/alerting-examples/. Veja "Alertas" no README.
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000/}
+      GF_SMTP_ENABLED: ${GRAFANA_SMTP_ENABLED:-false}
+      GF_SMTP_HOST: ${GRAFANA_SMTP_HOST:-}
+      GF_SMTP_USER: ${GRAFANA_SMTP_USER:-}
+      GF_SMTP_PASSWORD: ${GRAFANA_SMTP_PASS:-}
+      GF_SMTP_FROM_ADDRESS: ${GRAFANA_SMTP_FROM:-grafana@example.com}
+      GF_SMTP_STARTTLS_POLICY: ${GRAFANA_SMTP_STARTTLS:-MandatoryStartTLS}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     ports:
       # Só em 127.0.0.1 por padrão (HTTP sem TLS). Veja BIND_ADDRESS no .env.
       - "${BIND_ADDRESS:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
