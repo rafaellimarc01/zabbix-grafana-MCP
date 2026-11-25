@@ -1,26 +1,75 @@
-# Zabbix + Grafana: ready-to-use stack (Docker and Kubernetes)
+# zabbix-grafana-MCP: ready-to-use Zabbix + Grafana stack (Docker and Kubernetes)
 
 [Versão em português](README.md)
 
 A ready-made template to run **Zabbix 7.0 LTS** and **Grafana** with either **Docker Compose** or **Kubernetes** (Kustomize). Grafana ships with the Zabbix plugin installed, the Zabbix data source provisioned, two dashboards (hosts overview and Zabbix server health) and ready-made alert rules.
 
-## Docker Compose
+## Platforms
 
-```bash
-make env                 # creates .env with random passwords (or ./scripts/generate-secrets.sh)
-docker compose up -d
-```
+**Linux is the default platform.** The scripts are POSIX `sh`, the shortcuts use `make`, and CI brings the whole stack up (smoke test) on Ubuntu for every change. For production, run it on a Linux server. macOS and Windows work too, as alternatives for study and testing (see [Other platforms](#other-platforms)).
 
-On Windows without WSL (no `make`, no `sh`), create the `.env` with PowerShell instead: `powershell -ExecutionPolicy Bypass -File scripts\generate-secrets.ps1` (add `-Target k8s` for Kubernetes). The Portuguese README, section "Usando no Windows", lists PowerShell equivalents for every `make` shortcut.
+## Quick start on Linux (default)
 
-- Zabbix: http://localhost:8080 (user `Admin`, password `ZABBIX_ADMIN_PASSWORD` from `.env`)
-- Grafana: http://localhost:3000 (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from `.env`)
+Commands use `apt` (Ubuntu, Debian); on Fedora, RHEL, Rocky or Alma use `dnf`. You need 2 vCPU, 4 GB RAM and internet access on first start (Grafana downloads the Zabbix plugin).
 
-The web UIs listen on `127.0.0.1` only, since they speak plain HTTP. To reach them from another machine, put an HTTPS reverse proxy in front or set `BIND_ADDRESS=0.0.0.0` in `.env`.
+1. **Install Docker Engine 24+ with the compose plugin, git and make.** Follow the official guide for your distro ([Ubuntu](https://docs.docker.com/engine/install/ubuntu/), [Debian](https://docs.docker.com/engine/install/debian/), [Fedora](https://docs.docker.com/engine/install/fedora/), [RHEL](https://docs.docker.com/engine/install/rhel/)), or for a lab:
+
+   ```bash
+   curl -fsSL https://get.docker.com | sudo sh   # lab only; use your distro's guide in production
+   sudo systemctl enable --now docker
+   sudo apt install -y git make                  # Fedora/RHEL: sudo dnf install -y git make
+   docker compose version                        # must answer; "unknown command" means the plugin is missing
+   ```
+
+   Avoid the distro's `docker.io` package and the old hyphenated `docker-compose`; use `docker-ce` and `docker-compose-plugin` from Docker's repository.
+
+2. **Use Docker without sudo (optional).** `sudo usermod -aG docker "$USER"`, then `newgrp docker` (or log out and back in) and check with `docker run --rm hello-world`. Members of the `docker` group are effectively root; on shared servers keep using `sudo` or [rootless Docker](https://docs.docker.com/engine/security/rootless/).
+
+3. **Clone:**
+
+   ```bash
+   mkdir -p ~/projects && cd ~/projects
+   git clone https://github.com/<your-user>/zabbix-grafana-MCP.git
+   cd zabbix-grafana-MCP
+   ```
+
+4. **Generate passwords:** `make env` creates `.env` (mode `600`, never overwritten) with random passwords (without make: `./scripts/generate-secrets.sh`).
+
+5. **Start:** `make up` (checks the passwords and runs `docker compose up -d`). `docker compose ps -a` should show `zabbix-admin-password` and `zabbix-init` as `Exited (0)` after 1 to 2 minutes; follow with `make logs`.
+
+6. **Open:**
+   - Zabbix: http://localhost:8080 (user `Admin`, password `ZABBIX_ADMIN_PASSWORD` from `.env`)
+   - Grafana: http://localhost:3000 (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` from `.env`)
+
+   The web UIs listen on `127.0.0.1` only, since they speak plain HTTP. On a headless server, tunnel from your computer with `ssh -L 8080:localhost:8080 -L 3000:localhost:3000 user@server`. For direct network access, put an HTTPS reverse proxy in front or set `BIND_ADDRESS=0.0.0.0` in `.env`.
+
+7. **Monitor the server itself (optional).** The bundled `zabbix-agent` container monitors itself, not the Linux host. Install Zabbix Agent 2 on the host from the [Zabbix repository](https://www.zabbix.com/download?zabbix=7.0&components=agent_2) with `Server=127.0.0.1,172.16.0.0/12` and `ServerActive=127.0.0.1:10051`, then add the host in Zabbix with its LAN IP, port `10050`, and the **Linux by Zabbix agent** template.
+
+The stack comes back after a reboot (`restart: unless-stopped` plus `systemctl enable docker`). Shortcuts: `make help`, `make logs`, `make backup`, `make down`, `make reset` (deletes volumes).
 
 A one-shot `zabbix-admin-password` container replaces the default Admin password directly in the database before the web UI starts, so Admin is never reachable with `zabbix`. Then a one-shot `zabbix-init` container creates a read-only, API-only `grafana` user that Grafana uses to query Zabbix, and points the built-in "Zabbix server" host to the agent container.
 
 Port 10051 (trapper) listens on all interfaces for active agents. Docker-published ports bypass UFW/firewalld, so filter it in the `DOCKER-USER` iptables chain or set `ZABBIX_SERVER_BIND_ADDRESS`, and enable PSK encryption per host (see "Protegendo a porta 10051" in the Portuguese README).
+
+### Kubernetes on Linux
+
+Any of these works on a Linux machine, and all ship a default StorageClass: [k3s](https://docs.k3s.io/quick-start) (a real Linux server; includes Traefik for the `ingress` overlay; NodePorts on `http://<server-ip>:30080` and `:30300`), [kind](https://kind.sigs.k8s.io/docs/user/quick-start/) (quick tests inside Docker; use port-forward) or [minikube](https://minikube.sigs.k8s.io/docs/start/) (`http://$(minikube ip):30080`). With k3s:
+
+```bash
+curl -sfL https://get.k3s.io | sh -                    # installs k3s (includes kubectl)
+mkdir -p ~/.kube && sudo k3s kubectl config view --raw > ~/.kube/config && chmod 600 ~/.kube/config
+make k8s-secrets
+kubectl apply -k kubernetes/overlays/local
+kubectl -n monitoring get pods -w
+```
+
+See [Kubernetes](#kubernetes) below for the overlays.
+
+## Other platforms
+
+### Windows
+
+Recommended: Docker Desktop with WSL 2; open the Ubuntu (WSL) terminal, clone inside Linux (`~/projects`, not `/mnt/c/...`) and follow the Linux quick start from step 3. Without WSL (no `make`, no `sh`), create the `.env` with PowerShell instead: `powershell -ExecutionPolicy Bypass -File scripts\generate-secrets.ps1` (add `-Target k8s` for Kubernetes), then `docker compose up -d`. The Portuguese README, section "Usando no Windows", lists PowerShell equivalents for every `make` shortcut.
 
 ### macOS
 
