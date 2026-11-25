@@ -17,7 +17,9 @@ Use como ponto de partida para o seu laboratório, para estudos ou como base de 
 | zabbix-admin-password | `postgres:16-alpine` | Tarefa única: troca a senha padrão do Admin direto no banco, antes de a interface web subir |
 | zabbix-init | `zabbix/zabbix-web-nginx-pgsql:alpine-7.0.32` | Tarefa única: cria o usuário somente leitura do Grafana e liga o agente ao host |
 | postgres-backup | `postgres:16-alpine` | Backup automático diário do banco do Zabbix (`pg_dump`), com retenção de 7 dias |
-| Grafana | `grafana/grafana:12.4.16` | Dashboards, com o plugin [Zabbix para Grafana](https://grafana.com/grafana/plugins/alexanderzobnin-zabbix-app/) |
+| Grafana | `grafana/grafana:12.4.16` | Dashboards, com o plugin [Zabbix para Grafana](https://grafana.com/grafana/plugins/alexanderzobnin-zabbix-app/) 6.12.0 |
+
+O padrão é o Zabbix 7.0 LTS. O Zabbix 8.0 LTS também é suportado e testado no CI: veja [Zabbix 8.0](#zabbix-80).
 
 Dashboards incluídos (pasta **Zabbix** no Grafana):
 
@@ -454,9 +456,42 @@ Preencha `GRAFANA_ROOT_URL` com o endereço em que você abre o Grafana, para os
 - **Trocar de contato:** ao tirar um exemplo de `grafana/provisioning/alerting/`, o contato antigo continua salvo no banco do Grafana. Apague-o em **Alerting → Contact points** depois de remover a política, ou use `deleteContactPoints` no arquivo (veja a [documentação do Grafana](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/)).
 - Os triggers do próprio Zabbix continuam funcionando; os alertas do Grafana são uma camada a mais, útil para quem já centraliza notificações no Grafana.
 
+## Zabbix 8.0
+
+O modelo roda o Zabbix 7.0 LTS por padrão e também o 8.0 LTS, lançado em 5/11/2026. O CI sobe o ambiente inteiro nas duas versões a cada mudança (dashboards, alertas e backup).
+
+| Versão | Suporte completo até | Suporte limitado até | Tag |
+|---|---|---|---|
+| 7.0 LTS (padrão) | 30/06/2027 | 30/06/2029 | `alpine-7.0.32` |
+| 8.0 LTS | 30/11/2029 | 30/11/2031 | `alpine-8.0.0` |
+
+Datas da [política de ciclo de vida do Zabbix](https://www.zabbix.com/life_cycle_and_release_policy). O 7.0 continua o padrão até o 8.0 ganhar as primeiras versões de correção.
+
+**Instalação nova com o 8.0**
+
+- Docker Compose: no `.env`, troque para `ZABBIX_VERSION=alpine-8.0.0` e rode `make up`.
+- Kubernetes: acrescente o componente ao `components:` do seu overlay (por exemplo `kubernetes/overlays/local/kustomization.yaml`):
+
+  ```yaml
+  components:
+    - ../../components/zabbix-8
+  ```
+
+**O que muda no 8.0 e já está tratado aqui**
+
+- A imagem do Zabbix web 8.0 não traz `jq`; o `zabbix-init` agora só usa `sh`, `curl`, `grep` e `sed`.
+- O perfil padrão "User role" vem sem acesso à API. O usuário `grafana` usa um perfil próprio, "Grafana (somente leitura)": tipo User, sem nenhuma tela da interface e com acesso à API.
+- O método `hostinterface.update` foi removido; o init usa `host.update`.
+- O plugin do Grafana precisa da versão 6.10 ou mais nova para ler trends do 8.0. O modelo fixa a 6.12.0.
+- O PostgreSQL mínimo passou para 15. O modelo usa o 16.
+
+**Atualizar um ambiente que já roda o 7.0**
+
+Ainda não há um passo a passo automatizado (vem na próxima versão do modelo). Até lá: faça um backup (`make backup`) e copie-o para fora do servidor. Depois troque a tag e rode `make up`. O Zabbix server atualiza o banco sozinho ao subir. **Não há volta**: para retornar ao 7.0 é preciso restaurar o backup.
+
 ## Personalizando
 
-- **Versões:** troque as tags no `.env` (Docker) e no bloco `images:` de `kubernetes/base/kustomization.yaml` (Kubernetes). Para usar o Zabbix 8.0 LTS, por exemplo, use `alpine-8.0-latest`.
+- **Versões:** troque as tags no `.env` (Docker) e no bloco `images:` de `kubernetes/base/kustomization.yaml` (Kubernetes). Para o Zabbix 8.0, siga [Zabbix 8.0](#zabbix-80). O plugin do Grafana fica em `GRAFANA_ZABBIX_PLUGIN_VERSION` no `.env` e em `GF_PLUGINS_PREINSTALL_SYNC` no `kubernetes/base/grafana.yaml`.
 - **Novos dashboards:** exporte o JSON no Grafana, salve em `grafana/dashboards/` e reinicie o Grafana (no Kubernetes, adicione o arquivo também no `configMapGenerator` e rode `./scripts/sync-k8s-files.sh`). Na interface, use a fonte de dados **Zabbix** (uid `zabbix`).
 - **Fuso horário:** `TZ` no `.env` e no `configMapGenerator` `zabbix-config`.
 - **Portas:** `ZABBIX_WEB_PORT`, `GRAFANA_PORT` e `ZABBIX_SERVER_PORT` no `.env`.

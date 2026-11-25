@@ -40,7 +40,7 @@ aos respectivos projetos.
   montado, limites de memória, e o namespace com Pod Security `baseline`
   (aviso para `restricted`).
 - O job de init não baixa pacotes na hora: usa a imagem do Zabbix web, que já
-  tem `curl` e `jq`.
+  tem `curl` (o script só usa sh, curl, grep e sed).
 
 **Grafana**
 - Sem cadastro de usuários, sem acesso anônimo, sem criação de organizações,

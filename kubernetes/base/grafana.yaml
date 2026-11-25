@@ -132,8 +132,9 @@ spec:
             - name: GF_SECURITY_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef: {name: zabbix-secrets, key: GRAFANA_ADMIN_PASSWORD}
+            # Versão fixa do plugin (6.10+ é necessário para o Zabbix 8.0).
             - name: GF_PLUGINS_PREINSTALL_SYNC
-              value: alexanderzobnin-zabbix-app
+              value: alexanderzobnin-zabbix-app@6.12.0
             # Endurecimento do Grafana
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
