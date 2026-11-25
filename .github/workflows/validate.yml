@@ -385,7 +385,9 @@ jobs:
           mcp $Z "$ZABBIX_MCP_TOKEN" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' > ztools.json
           jq -r '.result.tools[].name' ztools.json | tee ztools.txt
           jq -e '[.result.tools[].name] | length >= 5 and all(endswith("_get"))' ztools.json
-          ! grep -qE 'item_get|macro_get|history_get|maintenance_create|problem_acknowledge' ztools.txt
+          if grep -qE 'item_get|macro_get|history_get|maintenance_create|problem_acknowledge' ztools.txt; then
+            echo "::error::ferramenta sensível ou de escrita exposta no MCP do Zabbix"; exit 1
+          fi
           mcp $Z "$ZABBIX_MCP_TOKEN" '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"host_get","arguments":{}}}' \
             | jq -e '.result.isError != true and (.result.content[0].text | contains("Zabbix server"))'
           # Token errado não lê nada
@@ -395,7 +397,9 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
             -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' $G)" = 401
           mcp $G "$GRAFANA_MCP_CLIENT_TOKEN" '{"jsonrpc":"2.0","id":4,"method":"tools/list"}' > gtools.json
-          ! jq -r '.result.tools[].name' gtools.json | grep -qE '^(update_dashboard|create_|delete_)'
+          if jq -r '.result.tools[].name' gtools.json | grep -qE '^(update_dashboard|create_|delete_)'; then
+            echo "::error::ferramenta de escrita exposta no MCP do Grafana"; exit 1
+          fi
           mcp $G "$GRAFANA_MCP_CLIENT_TOKEN" '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_datasources","arguments":{}}}' \
             | jq -e '.result.content[0].text | contains("alexanderzobnin-zabbix-datasource")'
           mcp $G "$GRAFANA_MCP_CLIENT_TOKEN" '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"search_dashboards","arguments":{"query":"Zabbix"}}}' \
