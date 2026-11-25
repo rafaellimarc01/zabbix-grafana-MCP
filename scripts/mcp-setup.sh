@@ -222,7 +222,25 @@ if [ -z "${GRAFANA_MCP_CLIENT_TOKEN:-}" ]; then
 fi
 
 # ---- Sobe os MCPs --------------------------------------------------------------
+# Recarrega o .env: as variáveis exportadas no início (vazias na primeira vez)
+# têm prioridade sobre o .env no docker compose e deixariam o MCP do Grafana
+# sem token.
+load_env
+[ -n "${GRAFANA_MCP_CLIENT_TOKEN:-}" ] && [ -n "${GRAFANA_MCP_SA_TOKEN:-}" ] || die "tokens do Grafana vazios no $ENV_FILE"
 log "subindo: $SERVICES"
 # shellcheck disable=SC2086 # lista de serviços
 docker compose --profile mcp up -d --no-deps --force-recreate $SERVICES
+
+# Confere que o MCP do Grafana recusa quem não manda o token.
+i=0
+until code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$GMCP_URL") && [ "$code" != 000 ]; do
+  i=$((i + 1)); [ "$i" -ge 30 ] && die "o MCP do Grafana não respondeu em $GMCP_URL"
+  sleep 1
+done
+if [ "$code" != 401 ]; then
+  docker compose --profile mcp stop grafana-mcp
+  die "o MCP do Grafana aceitou um pedido sem token (HTTP $code); ele foi parado"
+fi
 print_config
