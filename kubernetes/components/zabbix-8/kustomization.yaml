@@ -1,0 +1,16 @@
+# Troca o Zabbix 7.0 LTS (padrão) pelo Zabbix 8.0 LTS.
+# Para usar, acrescente ao "components:" do seu overlay:
+#   components:
+#     - ../../components/zabbix-8
+# Em um ambiente que já roda o 7.0, faça backup antes: o Zabbix server atualiza
+# o banco ao subir e não há volta (veja "Zabbix 8.0" no README).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+images:
+  - name: zabbix/zabbix-server-pgsql
+    newTag: alpine-8.0.0
+  - name: zabbix/zabbix-web-nginx-pgsql
+    newTag: alpine-8.0.0
+  - name: zabbix/zabbix-agent2
+    newTag: alpine-8.0.0

@@ -77,6 +77,14 @@ jobs:
               -schema-location default \
               -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
           done
+          # Componente zabbix-8: troca as três imagens do Zabbix para o 8.0.
+          mkdir -p kubernetes/overlays/ci-zabbix-8
+          printf 'resources: [../local]\ncomponents: [../../components/zabbix-8]\n' \
+            > kubernetes/overlays/ci-zabbix-8/kustomization.yaml
+          kubectl kustomize kubernetes/overlays/ci-zabbix-8 > zabbix-8.yaml
+          ./kubeconform -strict -summary zabbix-8.yaml
+          test "$(grep -c 'image: zabbix/.*:alpine-8\.0\.' zabbix-8.yaml)" = 4
+          ! grep -q 'image: zabbix/.*7\.0' zabbix-8.yaml
 
   # Os scripts e o Makefile rodam no Mac do usuário, que tem ferramentas BSD
   # (sed, grep, awk, tr, stat), bash 3.2 como /bin/sh e GNU make 3.81.
@@ -170,10 +178,18 @@ jobs:
           ./scripts/check-secrets.sh .env
           ./scripts/check-secrets.sh kubernetes/base/secrets.env
 
+  # Roda o ambiente inteiro com o Zabbix 7.0 LTS (padrão) e com o 8.0 LTS.
   smoke-test:
+    name: smoke-test (${{ matrix.zabbix }})
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        zabbix: [alpine-7.0.32, alpine-8.0.0]
+    env:
+      ZABBIX_VERSION: ${{ matrix.zabbix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -182,6 +198,7 @@ jobs:
       - name: Sobe o ambiente
         run: |
           ./scripts/generate-secrets.sh compose
+          sed -i "s/^ZABBIX_VERSION=.*/ZABBIX_VERSION=${ZABBIX_VERSION}/" .env
           docker compose up -d --wait --wait-timeout 300 postgres postgres-backup zabbix-server zabbix-web zabbix-agent
           docker compose up zabbix-init --exit-code-from zabbix-init
           docker compose up -d --wait --wait-timeout 180 grafana
@@ -199,6 +216,8 @@ jobs:
           # Admin usa a senha nova; a senha padrão "zabbix" não funciona mais
           api user.login "{\"username\":\"Admin\",\"password\":\"$ZABBIX_ADMIN_PASSWORD\"}" | jq -e .result
           api user.login '{"username":"Admin","password":"zabbix"}' | jq -e '.error'
+          # Versão do Zabbix é a da matriz
+          test "alpine-$(api apiinfo.version '{}' | jq -r .result)" = "$ZABBIX_VERSION"
           # Usuário do Grafana lê dados, mas não pode alterar nada
           TOKEN=$(api user.login "{\"username\":\"grafana\",\"password\":\"$ZABBIX_GRAFANA_PASSWORD\"}" | jq -r .result)
           api host.get '{"output":["host"]}' "$TOKEN" | jq -e '.result | length >= 1'
@@ -268,6 +287,63 @@ jobs:
             "select count(*) from users where username='grafana'")" = 1
           docker compose up -d --wait --wait-timeout 180 zabbix-server zabbix-web
           curl -fsS http://localhost:8080/ping
+
+      - name: Logs em caso de falha
+        if: failure()
+        run: docker compose logs --tail=200
+
+  # Atualização de um ambiente 7.0 com dados para o 8.0 (make upgrade-8) e
+  # volta para o 7.0 com o backup feito antes.
+  upgrade-test:
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Sobe o ambiente no Zabbix 7.0 e grava dados
+        run: |
+          ./scripts/generate-secrets.sh compose
+          grep -q '^ZABBIX_VERSION=alpine-7\.0\.' .env
+          docker compose up -d --wait --wait-timeout 300 postgres postgres-backup zabbix-server zabbix-web zabbix-agent
+          docker compose up zabbix-init --exit-code-from zabbix-init
+          docker compose up -d --wait --wait-timeout 180 grafana
+          set -a; . ./.env; set +a
+          api() { curl -fsS -H 'Content-Type: application/json-rpc' ${3:+-H "Authorization: Bearer $3"} \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":1}" http://localhost:8080/api_jsonrpc.php; }
+          TOKEN=$(api user.login "{\"username\":\"Admin\",\"password\":\"$ZABBIX_ADMIN_PASSWORD\"}" | jq -r .result)
+          api host.create '{"host":"criado-no-7","groups":[{"groupid":"2"}]}' "$TOKEN" | jq -e .result
+
+      - name: Atualiza para o 8.0 (make upgrade-8)
+        run: ./scripts/upgrade-zabbix-8.sh --yes | tee upgrade.log
+
+      - name: Confere o 8.0 com os dados do 7.0
+        run: |
+          set -a; . ./.env; set +a
+          test "$ZABBIX_VERSION" = alpine-8.0.0
+          grep -q '^ZABBIX_VERSION=alpine-7\.0\.' .env.antes-zabbix-8
+          api() { curl -fsS -H 'Content-Type: application/json-rpc' ${3:+-H "Authorization: Bearer $3"} \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":1}" http://localhost:8080/api_jsonrpc.php; }
+          test "$(api apiinfo.version '{}' | jq -r .result)" = 8.0.0
+          docker compose logs zabbix-server | grep -q 'database upgrade fully completed'
+          TOKEN=$(api user.login "{\"username\":\"grafana\",\"password\":\"$ZABBIX_GRAFANA_PASSWORD\"}" | jq -r .result)
+          api host.get '{"output":["host"]}' "$TOKEN" | jq -e '[.result[].host] | index("criado-no-7")'
+          curl -fsS -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" http://localhost:3000/api/datasources/uid/zabbix/health | jq -e '.status == "OK"'
+
+      - name: Volta para o 7.0 com o backup
+        run: |
+          dump=$(sed -n 's/^.*--rollback \(zabbix-[0-9-]*\.dump\).*$/\1/p' upgrade.log)
+          test -n "$dump"
+          ./scripts/upgrade-zabbix-8.sh --rollback "$dump" --yes
+          set -a; . ./.env; set +a
+          api() { curl -fsS -H 'Content-Type: application/json-rpc' ${3:+-H "Authorization: Bearer $3"} \
+            -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":1}" http://localhost:8080/api_jsonrpc.php; }
+          test "$(api apiinfo.version '{}' | jq -r .result)" = 7.0.32
+          TOKEN=$(api user.login "{\"username\":\"grafana\",\"password\":\"$ZABBIX_GRAFANA_PASSWORD\"}" | jq -r .result)
+          api host.get '{"output":["host"]}' "$TOKEN" | jq -e '[.result[].host] | index("criado-no-7")'
+          curl -fsS -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" http://localhost:3000/api/datasources/uid/zabbix/health | jq -e '.status == "OK"'
 
       - name: Logs em caso de falha
         if: failure()
