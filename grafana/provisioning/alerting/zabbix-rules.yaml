@@ -62,7 +62,7 @@ groups:
           origem: zabbix
         annotations:
           summary: "{{ $labels.host }} está indisponível"
-          description: "O Zabbix não consegue falar com o agente de {{ $labels.host }} há pelo menos 3 minutos (valor {{ $values.B.Value }}; 1 = disponível, 0 = indisponível)."
+          description: "O Zabbix não consegue falar com o agente de {{ $labels.host }} há pelo menos 3 minutos (valor {{ with $values.B }}{{ .Value }}{{ end }}; 1 = disponível, 0 = indisponível)."
         isPaused: false
       # CPU alta: item "CPU utilization" > 90 por 5m
       - uid: zbx-cpu-alta
@@ -107,7 +107,7 @@ groups:
           origem: zabbix
         annotations:
           summary: "CPU alta em {{ $labels.host }}"
-          description: "A média de uso de CPU em {{ $labels.host }} nos últimos 10 minutos está em {{ humanize $values.B.Value }}% (limite: 90%)."
+          description: "A média de uso de CPU em {{ $labels.host }} nos últimos 10 minutos está em {{ with $values.B }}{{ humanize .Value }}{{ end }}% (limite: 90%)."
         isPaused: false
       # Memória alta: item "Memory utilization" > 90 por 5m
       - uid: zbx-memoria-alta
@@ -152,7 +152,7 @@ groups:
           origem: zabbix
         annotations:
           summary: "Memória alta em {{ $labels.host }}"
-          description: "A média de uso de memória em {{ $labels.host }} nos últimos 10 minutos está em {{ humanize $values.B.Value }}% (limite: 90%)."
+          description: "A média de uso de memória em {{ $labels.host }} nos últimos 10 minutos está em {{ with $values.B }}{{ humanize .Value }}{{ end }}% (limite: 90%)."
         isPaused: false
       # Disco quase cheio: item "FS [*]: Space: Used, in %" > 90 por 10m
       - uid: zbx-disco-cheio
@@ -197,7 +197,7 @@ groups:
           origem: zabbix
         annotations:
           summary: "Disco quase cheio em {{ $labels.host }}"
-          description: "{{ $labels.item }} em {{ $labels.host }} está em {{ humanize $values.B.Value }}% (limite: 90%)."
+          description: "{{ $labels.item }} em {{ $labels.host }} está em {{ with $values.B }}{{ humanize .Value }}{{ end }}% (limite: 90%)."
         isPaused: false
       # Fila do Zabbix acumulada: item "Queue over 10 minutes" > 100 por 10m
       - uid: zbx-fila-zabbix
@@ -242,5 +242,5 @@ groups:
           origem: zabbix
         annotations:
           summary: "Fila do Zabbix acumulada em {{ $labels.host }}"
-          description: "{{ $values.B.Value }} itens estão há mais de 10 minutos sem coleta (limite: 100). Veja Administration > Queue no Zabbix."
+          description: "{{ with $values.B }}{{ .Value }}{{ end }} itens estão há mais de 10 minutos sem coleta (limite: 100). Veja Administration > Queue no Zabbix."
         isPaused: false
