@@ -51,7 +51,11 @@ A one-shot `zabbix-admin-password` container replaces the default Admin password
 
 Port 10051 (trapper) listens on all interfaces for active agents. Docker-published ports bypass UFW/firewalld, so filter it in the `DOCKER-USER` iptables chain or set `ZABBIX_SERVER_BIND_ADDRESS`, and enable PSK encryption per host (see "Protegendo a porta 10051" in the Portuguese README).
 
-### Kubernetes on Linux
+### Zabbix 8.0
+
+Zabbix 7.0 LTS is the default. Zabbix 8.0 LTS is also supported and tested in CI: set `ZABBIX_VERSION=alpine-8.0.0` in `.env` (Docker Compose), or add `- ../../components/zabbix-8` under `components:` in your Kubernetes overlay. To upgrade an existing 7.0 Compose install, run `make upgrade-8`: it backs up the database, switches `.env` to 8.0, waits for the in-place database upgrade and reruns the init. `./scripts/upgrade-zabbix-8.sh --rollback <dump>` goes back to 7.0 by restoring that backup. Details in the Portuguese README, section "Zabbix 8.0".
+
+## Kubernetes on Linux
 
 Any of these works on a Linux machine, and all ship a default StorageClass: [k3s](https://docs.k3s.io/quick-start) (a real Linux server; includes Traefik for the `ingress` overlay; NodePorts on `http://<server-ip>:30080` and `:30300`), [kind](https://kind.sigs.k8s.io/docs/user/quick-start/) (quick tests inside Docker; use port-forward) or [minikube](https://minikube.sigs.k8s.io/docs/start/) (`http://$(minikube ip):30080`). With k3s:
 

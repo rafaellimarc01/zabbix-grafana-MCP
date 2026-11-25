@@ -191,8 +191,8 @@ services:
   # Tarefa única: troca a senha padrão do Admin, cria o usuário somente leitura
   # do Grafana e aponta o host "Zabbix server" para o container do agente.
   # É idempotente; pode rodar quantas vezes quiser (docker compose up zabbix-init).
-  # Usa a imagem do zabbix-web, que já traz curl e jq: nada é baixado na hora
-  # e o container roda sem root.
+  # Usa a imagem do zabbix-web, que já traz curl (o script não usa jq): nada é
+  # baixado na hora e o container roda sem root.
   zabbix-init:
     image: zabbix/zabbix-web-nginx-pgsql:${ZABBIX_VERSION:-alpine-7.0.32}
     restart: "no"
@@ -227,7 +227,8 @@ services:
       TZ: ${TZ:-America/Sao_Paulo}
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env (rode make env)}
-      GF_PLUGINS_PREINSTALL_SYNC: alexanderzobnin-zabbix-app
+      # Versão fixa do plugin (6.10+ é necessário para o Zabbix 8.0).
+      GF_PLUGINS_PREINSTALL_SYNC: alexanderzobnin-zabbix-app@${GRAFANA_ZABBIX_PLUGIN_VERSION:-6.12.0}
       # Endurecimento do Grafana
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_USERS_ALLOW_ORG_CREATE: "false"

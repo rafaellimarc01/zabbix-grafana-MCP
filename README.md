@@ -17,7 +17,9 @@ Use como ponto de partida para o seu laboratório, para estudos ou como base de 
 | zabbix-admin-password | `postgres:16-alpine` | Tarefa única: troca a senha padrão do Admin direto no banco, antes de a interface web subir |
 | zabbix-init | `zabbix/zabbix-web-nginx-pgsql:alpine-7.0.32` | Tarefa única: cria o usuário somente leitura do Grafana e liga o agente ao host |
 | postgres-backup | `postgres:16-alpine` | Backup automático diário do banco do Zabbix (`pg_dump`), com retenção de 7 dias |
-| Grafana | `grafana/grafana:12.4.16` | Dashboards, com o plugin [Zabbix para Grafana](https://grafana.com/grafana/plugins/alexanderzobnin-zabbix-app/) |
+| Grafana | `grafana/grafana:12.4.16` | Dashboards, com o plugin [Zabbix para Grafana](https://grafana.com/grafana/plugins/alexanderzobnin-zabbix-app/) 6.12.0 |
+
+O padrão é o Zabbix 7.0 LTS. O Zabbix 8.0 LTS também é suportado e testado no CI: veja [Zabbix 8.0](#zabbix-80).
 
 Dashboards incluídos (pasta **Zabbix** no Grafana):
 
@@ -454,9 +456,73 @@ Preencha `GRAFANA_ROOT_URL` com o endereço em que você abre o Grafana, para os
 - **Trocar de contato:** ao tirar um exemplo de `grafana/provisioning/alerting/`, o contato antigo continua salvo no banco do Grafana. Apague-o em **Alerting → Contact points** depois de remover a política, ou use `deleteContactPoints` no arquivo (veja a [documentação do Grafana](https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/)).
 - Os triggers do próprio Zabbix continuam funcionando; os alertas do Grafana são uma camada a mais, útil para quem já centraliza notificações no Grafana.
 
+## Zabbix 8.0
+
+O modelo roda o Zabbix 7.0 LTS por padrão e também o 8.0 LTS, lançado em 5/11/2026. O CI sobe o ambiente inteiro nas duas versões a cada mudança (dashboards, alertas e backup).
+
+| Versão | Suporte completo até | Suporte limitado até | Tag |
+|---|---|---|---|
+| 7.0 LTS (padrão) | 30/06/2027 | 30/06/2029 | `alpine-7.0.32` |
+| 8.0 LTS | 30/11/2029 | 30/11/2031 | `alpine-8.0.0` |
+
+Datas da [política de ciclo de vida do Zabbix](https://www.zabbix.com/life_cycle_and_release_policy). O 7.0 continua o padrão até o 8.0 ganhar as primeiras versões de correção.
+
+**Instalação nova com o 8.0**
+
+- Docker Compose: no `.env`, troque para `ZABBIX_VERSION=alpine-8.0.0` e rode `make up`.
+- Kubernetes: acrescente o componente ao `components:` do seu overlay (por exemplo `kubernetes/overlays/local/kustomization.yaml`):
+
+  ```yaml
+  components:
+    - ../../components/zabbix-8
+  ```
+
+**O que muda no 8.0 e já está tratado aqui**
+
+- A imagem do Zabbix web 8.0 não traz `jq`; o `zabbix-init` agora só usa `sh`, `curl`, `grep` e `sed`.
+- O perfil padrão "User role" vem sem acesso à API. O usuário `grafana` usa um perfil próprio, "Grafana (somente leitura)": tipo User, sem nenhuma tela da interface e com acesso à API.
+- O método `hostinterface.update` foi removido; o init usa `host.update`.
+- O plugin do Grafana precisa da versão 6.10 ou mais nova para ler trends do 8.0. O modelo fixa a 6.12.0.
+- O PostgreSQL mínimo passou para 15. O modelo usa o 16.
+
+**Atualizar um ambiente que já roda o 7.0 (Docker Compose)**
+
+A atualização migra o banco no lugar e **não tem volta** sem backup. O comando abaixo faz o backup antes e guarda o nome do arquivo; o CI testa a atualização e o retorno a cada mudança.
+
+```bash
+make upgrade-8        # sem make: ./scripts/upgrade-zabbix-8.sh
+```
+
+Ele pede para digitar `SIM` e então:
+
+1. Faz um backup do banco e mostra o nome do arquivo (por exemplo `zabbix-20261125-020000.dump`).
+2. Troca `ZABBIX_VERSION` no `.env` para `alpine-8.0.0` (o `.env` antigo fica em `.env.antes-zabbix-8`).
+3. Sobe o Zabbix 8.0 e espera o server atualizar o banco. Em bancos grandes, com muito histórico, isso pode levar de minutos a horas; acompanhe com `docker compose logs -f zabbix-server`.
+4. Roda o `zabbix-init` e reinicia o Grafana.
+
+Antes de começar, copie um backup para fora do servidor (veja [Backup do banco](#backup-do-banco)). Se você tem agentes ou proxies fora deste Compose: agentes 7.0 continuam funcionando com o server 8.0, mas proxies 7.0 ficam em modo limitado até serem atualizados.
+
+**Voltar para o 7.0** (apaga os dados gravados depois da atualização):
+
+```bash
+./scripts/upgrade-zabbix-8.sh --rollback zabbix-20261125-020000.dump
+```
+
+**Kubernetes:** faça um backup manual e espere terminar, depois acrescente o componente e aplique.
+
+```bash
+kubectl -n monitoring create job --from=cronjob/postgres-backup backup-antes-zabbix-8
+kubectl -n monitoring wait --for=condition=complete job/backup-antes-zabbix-8 --timeout=30m
+# acrescente "- ../../components/zabbix-8" ao components: do overlay e aplique
+kubectl apply -k kubernetes/overlays/local
+kubectl -n monitoring logs -f deploy/zabbix-server   # espere "database upgrade fully completed"
+```
+
+Para voltar, restaure o backup como em [Backup do banco → Kubernetes](#kubernetes) depois de recriar o esquema do banco e tire o componente do overlay.
+
 ## Personalizando
 
-- **Versões:** troque as tags no `.env` (Docker) e no bloco `images:` de `kubernetes/base/kustomization.yaml` (Kubernetes). Para usar o Zabbix 8.0 LTS, por exemplo, use `alpine-8.0-latest`.
+- **Versões:** troque as tags no `.env` (Docker) e no bloco `images:` de `kubernetes/base/kustomization.yaml` (Kubernetes). Para o Zabbix 8.0, siga [Zabbix 8.0](#zabbix-80). O plugin do Grafana fica em `GRAFANA_ZABBIX_PLUGIN_VERSION` no `.env` e em `GF_PLUGINS_PREINSTALL_SYNC` no `kubernetes/base/grafana.yaml`.
 - **Novos dashboards:** exporte o JSON no Grafana, salve em `grafana/dashboards/` e reinicie o Grafana (no Kubernetes, adicione o arquivo também no `configMapGenerator` e rode `./scripts/sync-k8s-files.sh`). Na interface, use a fonte de dados **Zabbix** (uid `zabbix`).
 - **Fuso horário:** `TZ` no `.env` e no `configMapGenerator` `zabbix-config`.
 - **Portas:** `ZABBIX_WEB_PORT`, `GRAFANA_PORT` e `ZABBIX_SERVER_PORT` no `.env`.
