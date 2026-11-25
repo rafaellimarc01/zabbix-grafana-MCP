@@ -1,4 +1,4 @@
-# zabbix-grafana-MCP: ready-to-use Zabbix + Grafana stack (Docker and Kubernetes)
+# Monitoring with MCP: ready-to-use Zabbix + Grafana stack with Docker or Kubernetes and opcional IA
 
 [Versão em português](README.md)
 
