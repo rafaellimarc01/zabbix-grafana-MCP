@@ -47,6 +47,28 @@ aos respectivos projetos.
   sem snapshots externos, sem Gravatar e sem telemetria. Cookie `SameSite=strict`
   e, atrás de HTTPS (overlays `gateway` e `ingress`), cookie `Secure`.
 
+**MCP (opcional, make mcp)**
+- A IA conecta só no `mcp-gateway`, que escuta apenas em `127.0.0.1` (mesmo
+  com `BIND_ADDRESS=0.0.0.0`), exige o `MCP_TOKEN` e recusa `Host`/`Origin` de
+  outros sites. Os MCPs oficiais do Zabbix e do Grafana ficam só na rede
+  interna, sem porta publicada, e os tokens deles nunca chegam à IA.
+- Somente leitura: no Zabbix só as ferramentas `*_get`, sem as que devolvem
+  chaves de itens, macros, interfaces e histórico bruto; no Grafana,
+  `--disable-write` e só ferramentas de dashboards, alertas, anotações,
+  datasources e busca.
+- Usuário `mcp` próprio no Zabbix (tipo User, sem interface web, auditado) e
+  service account `mcp` Viewer no Grafana. Os dois exigem token; os tokens
+  ficam no `.env` (permissão 600, fora do Git).
+- Fica com você: não expor essa porta na rede e não colar os tokens em
+  chats ou prints.
+- No Kubernetes (componente `mcp`): Service só `ClusterIP`, nenhum outro pod
+  alcança o pod `mcp` (NetworkPolicy) e os MCPs internos só escutam em
+  `127.0.0.1` dentro do pod. O MCP de Kubernetes é só leitura, usa a
+  ServiceAccount `mcp` com o papel `view` apenas no namespace `monitoring`
+  (sem Secrets, que também ficam bloqueados na configuração dele) e nunca
+  repassa o token de quem chama. Os tokens do Zabbix e do Grafana ficam num
+  volume em memória e são trocados a cada reinício do pod.
+
 **CI**
 - Token do GitHub só com leitura, Actions fixadas por SHA e atualizadas pelo
   Dependabot, binários baixados conferidos por SHA-256.

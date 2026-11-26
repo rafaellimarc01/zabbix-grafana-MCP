@@ -73,9 +73,13 @@ jobs:
           # Gateway e HTTPRoute (overlay gateway) vêm de CRDs: o esquema sai do
           # catálogo de CRDs do datree.
           for o in local ingress gateway; do
-            kubectl kustomize "kubernetes/overlays/$o" | ./kubeconform -strict -summary \
+            kubectl kustomize "kubernetes/overlays/$o" > "$o.yaml"
+            ./kubeconform -strict -summary \
               -schema-location default \
-              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              "$o.yaml"
+            # Tudo no namespace monitoring (sem namespace, iria para o "default").
+            yq -o=json -I=0 "$o.yaml" | jq -s -e 'map(select(.kind != "Namespace") | .metadata.namespace == "monitoring") | all'
           done
           # Componente zabbix-8: troca as três imagens do Zabbix para o 8.0.
           mkdir -p kubernetes/overlays/ci-zabbix-8
@@ -84,7 +88,20 @@ jobs:
           kubectl kustomize kubernetes/overlays/ci-zabbix-8 > zabbix-8.yaml
           ./kubeconform -strict -summary zabbix-8.yaml
           test "$(grep -c 'image: zabbix/.*:alpine-8\.0\.' zabbix-8.yaml)" = 4
-          ! grep -q 'image: zabbix/.*7\.0' zabbix-8.yaml
+          if grep -q 'image: zabbix/.*7\.0' zabbix-8.yaml; then echo "::error::imagem do Zabbix 7.0 no componente zabbix-8"; exit 1; fi
+          # Componente mcp: tudo no namespace monitoring, imagens com versão,
+          # Service só ClusterIP e RBAC só de leitura no namespace.
+          mkdir -p kubernetes/overlays/ci-mcp
+          printf 'namespace: monitoring\nresources: [../local]\ncomponents: [../../components/zabbix-8, ../../components/mcp]\n' \
+            > kubernetes/overlays/ci-mcp/kustomization.yaml
+          kubectl kustomize kubernetes/overlays/ci-mcp > mcp.yaml
+          ./kubeconform -strict -summary mcp.yaml
+          yq -o=json -I=0 mcp.yaml | jq -s -e '
+            (map(select(.kind != "Namespace") | .metadata.namespace == "monitoring") | all)
+            and (map(select(.kind == "Service" and .metadata.name == "mcp")) | length == 1 and .[0].spec.type == null)
+            and (map(select(.kind == "RoleBinding")) | length == 1 and .[0].roleRef.kind == "ClusterRole" and .[0].roleRef.name == "view")
+            and (map(select(.kind == "ClusterRole" or .kind == "ClusterRoleBinding")) | length == 0)
+            and (map(select(.kind == "Deployment" and .metadata.name == "mcp") | .spec.template.spec | (.initContainers + .containers)[] | .image | test(":")) | length == 5 and all)'
 
   # Os scripts e o Makefile rodam no Mac do usuário, que tem ferramentas BSD
   # (sed, grep, awk, tr, stat), bash 3.2 como /bin/sh e GNU make 3.81.
@@ -348,3 +365,93 @@ jobs:
       - name: Logs em caso de falha
         if: failure()
         run: docker compose logs --tail=200
+
+  # MCP único (mcp-gateway) com os MCPs do Zabbix (8.0) e do Grafana por trás:
+  # make mcp, só leitura, só 127.0.0.1, MCPs oficiais sem porta publicada.
+  mcp-test:
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Testes do gateway
+        working-directory: mcp-gateway
+        run: python3 -m unittest -v
+
+      - name: Sobe o ambiente no Zabbix 8.0
+        run: |
+          ./scripts/generate-secrets.sh compose
+          sed -i 's/^ZABBIX_VERSION=.*/ZABBIX_VERSION=alpine-8.0.0/' .env
+          docker compose up -d --wait --wait-timeout 300 postgres postgres-backup zabbix-server zabbix-web zabbix-agent
+          docker compose up zabbix-init --exit-code-from zabbix-init
+          docker compose up -d --wait --wait-timeout 180 grafana
+
+      - name: make mcp
+        run: |
+          ./scripts/mcp-setup.sh | tee mcp.log
+          grep -q 'claude mcp add --transport http zabbix-grafana http://127.0.0.1:8765/mcp' mcp.log
+          docker compose --profile mcp up -d --wait --wait-timeout 60 --no-deps mcp-gateway
+          docker compose --profile mcp ps
+
+      - name: Testa o MCP
+        run: |
+          set -a; . ./.env; set +a
+          test -n "$MCP_TOKEN" && test -n "$ZABBIX_MCP_TOKEN" && test -n "$GRAFANA_MCP_SA_TOKEN" && test -n "$GRAFANA_MCP_CLIENT_TOKEN"
+          URL=http://127.0.0.1:8765/mcp
+          mcp() { curl -sS -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' -d "$1" "$URL"; }
+          code() { curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' "$@" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$URL"; }
+          # Sem token, token errado e Origin de outro site são recusados
+          test "$(code)" = 401
+          test "$(code -H 'Authorization: Bearer errado-errado-errado-errado-errado')" = 401
+          test "$(code -H "Authorization: Bearer $MCP_TOKEN" -H 'Origin: https://exemplo.com')" = 403
+          mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            | jq -e '.result.serverInfo.name == "zabbix-grafana-mcp" and .result.capabilities.tools'
+          mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' > tools.json
+          jq -r '.result.tools[].name' tools.json | tee tools.txt
+          # Zabbix: só ferramentas de leitura (*_get), sem as sensíveis
+          jq -e '[.result.tools[].name | select(startswith("zabbix_"))] | length >= 5 and all(endswith("_get"))' tools.json
+          if grep -qE '^zabbix_(item_get|macro_get|history_get|maintenance_create|problem_acknowledge)' tools.txt; then
+            echo "::error::ferramenta sensível ou de escrita exposta no MCP"; exit 1
+          fi
+          # Grafana: sem ferramentas de escrita
+          jq -e '[.result.tools[].name | select(startswith("grafana_"))] | length >= 5' tools.json
+          if grep -qE '^grafana_(update_dashboard|create_|delete_)' tools.txt; then
+            echo "::error::ferramenta de escrita exposta no MCP"; exit 1
+          fi
+          mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"zabbix_host_get","arguments":{}}}' \
+            | jq -e '.result.isError != true and (.result.content[0].text | contains("Zabbix server"))'
+          mcp '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"grafana_list_datasources","arguments":{}}}' \
+            | jq -e '.result.content[0].text | contains("alexanderzobnin-zabbix-datasource")'
+          mcp '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"grafana_search_dashboards","arguments":{"query":"Zabbix"}}}' \
+            | jq -e '.result.content[0].text | contains("zabbix-overview")'
+          # Só o gateway tem porta, e só em 127.0.0.1
+          docker compose --profile mcp port mcp-gateway 8765 | grep -q '^127\.0\.0\.1:8765$'
+          for s in zabbix-mcp grafana-mcp; do
+            ports=$(docker inspect -f '{{json .HostConfig.PortBindings}}' "$(docker compose --profile mcp ps -q "$s")")
+            if [ "$ports" != "{}" ]; then
+              echo "::error::$s publicou porta no host: $ports"; exit 1
+            fi
+          done
+          # Por dentro, o MCP do Grafana também exige o token (defesa em profundidade)
+          docker compose --profile mcp exec -T mcp-gateway python -c "
+          import urllib.request, urllib.error, sys
+          r = urllib.request.Request('http://grafana-mcp:8000/mcp', data=b'{}', headers={'Content-Type': 'application/json'})
+          try: urllib.request.urlopen(r, timeout=10); sys.exit('grafana-mcp aceitou pedido sem token')
+          except urllib.error.HTTPError as e: sys.exit(0 if e.code == 401 else f'HTTP {e.code}')"
+
+      - name: make mcp de novo mantém os tokens
+        run: |
+          set -a; . ./.env; set +a
+          before="$MCP_TOKEN $ZABBIX_MCP_TOKEN $GRAFANA_MCP_SA_TOKEN $GRAFANA_MCP_CLIENT_TOKEN"
+          ./scripts/mcp-setup.sh | grep '^\[mcp\]'
+          set -a; . ./.env; set +a
+          test "$before" = "$MCP_TOKEN $ZABBIX_MCP_TOKEN $GRAFANA_MCP_SA_TOKEN $GRAFANA_MCP_CLIENT_TOKEN"
+
+      - name: Logs em caso de falha
+        if: failure()
+        run: docker compose --profile mcp logs --tail=200

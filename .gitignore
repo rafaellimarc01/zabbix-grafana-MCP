@@ -21,3 +21,6 @@ grafana/provisioning/alerting/email.yaml
 grafana/provisioning/alerting/telegram.yaml
 kubernetes/base/files/grafana/provisioning/alerting/email.yaml
 kubernetes/base/files/grafana/provisioning/alerting/telegram.yaml
+
+# Python
+__pycache__/

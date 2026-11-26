@@ -2,7 +2,15 @@
 
 [Versão em português](README.md)
 
-A ready-made template to run **Zabbix 7.0 LTS** and **Grafana** with either **Docker Compose** or **Kubernetes** (Kustomize). Grafana ships with the Zabbix plugin installed, the Zabbix data source provisioned, two dashboards (hosts overview and Zabbix server health) and ready-made alert rules.
+A ready-made template to run **Zabbix** and **Grafana** with either **Docker Compose** or **Kubernetes** (Kustomize). Grafana ships with the Zabbix plugin installed, the Zabbix data source provisioned, two dashboards (hosts overview and Zabbix server health) and ready-made alert rules.
+
+The project delivers three things:
+
+| | What it is | Where |
+|---|---|---|
+| **Zabbix 7.0 or 8.0 LTS** | 7.0 is the default; 8.0 is optional, tested in CI, with an automated 7.0 upgrade | [Zabbix 8.0](#zabbix-80) |
+| **Grafana with the Zabbix plugin** | Dashboards and alert rules, reading Zabbix through a read-only user | [Alerts](#alerts) |
+| **MCP for AI assistants** | A single MCP server (one URL, one token) that combines the official Zabbix and Grafana MCP servers, read-only and bound to `127.0.0.1`, so Claude and other assistants on your machine can query your monitoring | [MCP](#mcp-zabbix-and-grafana-for-ai-assistants) |
 
 ## Platforms
 
@@ -54,6 +62,27 @@ Port 10051 (trapper) listens on all interfaces for active agents. Docker-publish
 ### Zabbix 8.0
 
 Zabbix 7.0 LTS is the default. Zabbix 8.0 LTS is also supported and tested in CI: set `ZABBIX_VERSION=alpine-8.0.0` in `.env` (Docker Compose), or add `- ../../components/zabbix-8` under `components:` in your Kubernetes overlay. To upgrade an existing 7.0 Compose install, run `make upgrade-8`: it backs up the database, switches `.env` to 8.0, waits for the in-place database upgrade and reruns the init. `./scripts/upgrade-zabbix-8.sh --rollback <dump>` goes back to 7.0 by restoring that backup. Details in the Portuguese README, section "Zabbix 8.0".
+
+## MCP: Zabbix and Grafana for AI assistants
+
+The assistant connects to **one MCP server**, `mcp-gateway` (`127.0.0.1:8765/mcp`), with **one token** (`MCP_TOKEN`). Behind it run the official [Zabbix MCP server](https://hub.docker.com/r/zabbix/zabbix-mcp-server) (requires Zabbix 8.0) and the official [Grafana MCP server](https://github.com/grafana/mcp-grafana), on the internal Docker network only. Their tools are exposed as `zabbix_*` and `grafana_*`. The gateway is this repo's `mcp-gateway/gateway.py`, plain Python standard library.
+
+`make mcp` creates a read-only Zabbix user `mcp` with an API token and a Grafana `mcp` service account (Viewer), generates the internal Grafana MCP token and `MCP_TOKEN`, stores them in `.env`, builds and starts the three containers, checks that requests without the token are refused and prints ready-to-paste client configs (`make mcp-config` prints them again).
+
+- **No exposed ports:** only `mcp-gateway` publishes a port, on `127.0.0.1`, regardless of `BIND_ADDRESS`. It also rejects foreign `Host`/`Origin` headers (DNS rebinding).
+- **One token for the assistant;** the Zabbix and Grafana tokens never leave the containers. The internal Grafana MCP still requires its own token.
+- **Read-only:** Zabbix exposes only `*_get` tools (minus item keys, macros, interfaces and raw history); Grafana runs with `--disable-write` and only the dashboard, alerting, annotation, datasource and search tools. Every Zabbix call shows up in the Zabbix audit log as user `mcp`.
+- On Zabbix 7.0 only the `grafana_*` tools are available.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http zabbix-grafana http://127.0.0.1:8765/mcp --header "Authorization: Bearer <MCP_TOKEN>"
+```
+
+Claude Desktop uses [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node.js); `make mcp-config` prints the `claude_desktop_config.json` block. ChatGPT and Claude on the web need a public HTTPS URL, which this local mode deliberately does not provide; OAuth plus an optional outbound tunnel is planned, as are cross-system tools (Zabbix, Grafana and Kubernetes).
+
+**Kubernetes:** add `../../components/zabbix-8` and `../../components/mcp` under `components:` in your overlay. It runs one `mcp` pod with the gateway and, inside the pod on `127.0.0.1` only, the official Zabbix and Grafana MCP servers plus [`containers/kubernetes-mcp-server`](https://github.com/containers/kubernetes-mcp-server), which adds read-only `k8s_*` tools (pods, logs, events and resources) through a ServiceAccount bound to the `view` role in the `monitoring` namespace only (no Secrets). The Service is ClusterIP only and no other pod may reach it. The assistant token is `MCP_PASSWORD` in `kubernetes/base/secrets.env`; then run `make k8s-mcp` (port-forward to `127.0.0.1:8765`) and `make k8s-mcp-config`.
 
 ## Kubernetes on Linux
 
