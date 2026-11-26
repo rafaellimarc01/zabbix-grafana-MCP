@@ -1,22 +1,24 @@
 #!/bin/sh
-# Prepara e sobe os servidores MCP do Zabbix e do Grafana (perfil "mcp" do
-# Docker Compose) para IAs como Claude e ChatGPT usarem NA PRÓPRIA MÁQUINA.
+# Prepara e sobe o MCP único do Zabbix e do Grafana (perfil "mcp" do Docker
+# Compose) para IAs como Claude e ChatGPT usarem NA PRÓPRIA MÁQUINA.
 #
-#   ./scripts/mcp-setup.sh           -> cria as credenciais e sobe os MCPs
+#   ./scripts/mcp-setup.sh           -> cria as credenciais e sobe o MCP
 #   ./scripts/mcp-setup.sh config    -> só mostra como configurar os clientes
+#
+# A IA conecta só no mcp-gateway (um endereço, um token). Por trás dele ficam
+# os MCPs oficiais do Zabbix e do Grafana, sem porta publicada.
 #
 # Idempotente. Na primeira vez:
 #  - Zabbix (só no 8.0, que traz o MCP oficial): cria o usuário "mcp", somente
 #    leitura e só API, e um token de API para ele.
 #  - Grafana: cria a service account "mcp" (Viewer) e um token para ela.
-#  - Gera o token que os clientes MCP enviam ao MCP do Grafana.
-# Os tokens ficam no .env (ZABBIX_MCP_TOKEN, GRAFANA_MCP_SA_TOKEN e
+#  - Gera o token interno do MCP do Grafana e o token que a IA usa (MCP_TOKEN).
+# Os tokens ficam no .env (MCP_TOKEN, ZABBIX_MCP_TOKEN, GRAFANA_MCP_SA_TOKEN e
 # GRAFANA_MCP_CLIENT_TOKEN); nas próximas vezes são reaproveitados enquanto
-# funcionarem. Para trocar todos, apague essas três linhas do .env e rode de
-# novo.
+# funcionarem. Para trocar todos, apague essas linhas do .env e rode de novo.
 #
-# Os MCPs só escutam em 127.0.0.1 e só leem dados (nenhuma ferramenta de
-# escrita). Requer o ambiente rodando (make up), curl, grep e sed.
+# O MCP só escuta em 127.0.0.1 e só lê dados (nenhuma ferramenta de escrita).
+# Requer o ambiente rodando (make up), curl, grep e sed.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -33,8 +35,8 @@ load_env
 
 ZABBIX_API="http://127.0.0.1:${ZABBIX_WEB_PORT:-8080}/api_jsonrpc.php"
 GRAFANA="http://127.0.0.1:${GRAFANA_PORT:-3000}"
-ZMCP_URL="http://127.0.0.1:${MCP_ZABBIX_PORT:-8443}/mcp"
-GMCP_URL="http://127.0.0.1:${MCP_GRAFANA_PORT:-8000}/mcp"
+MCP_URL="http://127.0.0.1:${MCP_PORT:-8765}/mcp"
+MCP_NAME=zabbix-grafana
 MCP_USER=mcp
 TOKEN_NAME=mcp-local
 
@@ -81,28 +83,12 @@ print_config() {
 
 ==================== Como conectar as IAs (só nesta máquina) ====================
 
-Os tokens abaixo dão acesso de LEITURA ao seu Zabbix e ao seu Grafana. Trate-os
-como senhas: não cole em chats, prints ou repositórios.
-EOF
-  if [ -n "${ZABBIX_MCP_TOKEN:-}" ]; then
-    cat <<EOF
+O token abaixo dá acesso de LEITURA ao seu Zabbix e ao seu Grafana. Trate-o
+como senha: não cole em chats, prints ou repositórios.
 
 --- Claude Code ---------------------------------------------------------------
-claude mcp add --transport http zabbix $ZMCP_URL \\
-  --header "Authorization: Bearer $ZABBIX_MCP_TOKEN"
-claude mcp add --transport http grafana $GMCP_URL \\
-  --header "Authorization: Bearer $GRAFANA_MCP_CLIENT_TOKEN"
-EOF
-  else
-    cat <<EOF
-
---- Claude Code ---------------------------------------------------------------
-claude mcp add --transport http grafana $GMCP_URL \\
-  --header "Authorization: Bearer $GRAFANA_MCP_CLIENT_TOKEN"
-(O MCP do Zabbix precisa do Zabbix 8.0; veja "Zabbix 8.0" no README.)
-EOF
-  fi
-  cat <<EOF
+claude mcp add --transport http $MCP_NAME $MCP_URL \\
+  --header "Authorization: Bearer $MCP_TOKEN"
 
 --- Claude Desktop (precisa do Node.js) ---------------------------------------
 Em Settings > Developer > Edit Config, junte isto ao claude_desktop_config.json
@@ -110,36 +96,25 @@ e reinicie o Claude Desktop:
 
 {
   "mcpServers": {
-EOF
-  if [ -n "${ZABBIX_MCP_TOKEN:-}" ]; then
-    cat <<EOF
-    "zabbix": {
+    "$MCP_NAME": {
       "command": "npx",
-      "args": ["-y", "mcp-remote@0.16.7", "$ZMCP_URL", "--header", "Authorization:\${AUTH}"],
-      "env": {"AUTH": "Bearer $ZABBIX_MCP_TOKEN"}
-    },
-EOF
-  fi
-  cat <<EOF
-    "grafana": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote@0.16.7", "$GMCP_URL", "--header", "Authorization:\${AUTH}"],
-      "env": {"AUTH": "Bearer $GRAFANA_MCP_CLIENT_TOKEN"}
+      "args": ["-y", "mcp-remote@0.16.7", "$MCP_URL", "--header", "Authorization:\${AUTH}"],
+      "env": {"AUTH": "Bearer $MCP_TOKEN"}
     }
   }
 }
 
 --- Outros clientes (Codex, VS Code, Cursor...) -------------------------------
-Servidor MCP HTTP (streamable) com cabeçalho Authorization: Bearer <token>:
+Servidor MCP HTTP (streamable): $MCP_URL
+Cabeçalho: Authorization: Bearer <MCP_TOKEN do .env>
 EOF
-  [ -n "${ZABBIX_MCP_TOKEN:-}" ] && echo "  Zabbix:  $ZMCP_URL   token: ZABBIX_MCP_TOKEN do .env"
-  echo "  Grafana: $GMCP_URL   token: GRAFANA_MCP_CLIENT_TOKEN do .env"
+  [ -n "${ZABBIX_MCP_TOKEN:-}" ] || echo "(As ferramentas zabbix_* precisam do Zabbix 8.0; veja \"Zabbix 8.0\" no README.)"
   echo
   echo "Para ver isto de novo: make mcp-config"
 }
 
 if [ "${1:-}" = config ]; then
-  [ -n "${GRAFANA_MCP_CLIENT_TOKEN:-}" ] || die "os MCPs ainda não foram configurados; rode make mcp"
+  [ -n "${MCP_TOKEN:-}" ] || die "o MCP ainda não foi configurado; rode make mcp"
   print_config
   exit 0
 fi
@@ -151,10 +126,10 @@ curl -fsS "$GRAFANA/api/health" >/dev/null 2>&1 || die "o Grafana não respondeu
 log "Zabbix $VERSION e Grafana no ar"
 
 # ---- Zabbix: usuário mcp + token de API (só 8.0) -----------------------------
-SERVICES="grafana-mcp"
+SERVICES="grafana-mcp mcp-gateway"
 case $VERSION in
   8.*)
-    SERVICES="zabbix-mcp grafana-mcp"
+    SERVICES="zabbix-mcp grafana-mcp mcp-gateway"
     # Token atual ainda vale? (checkAuthentication devolve o usuário dono dele)
     CHECK=""
     [ -z "${ZABBIX_MCP_TOKEN:-}" ] || CHECK=$(zcall user.checkAuthentication "{\"token\":$(str "$ZABBIX_MCP_TOKEN")}" 2>/dev/null || true)
@@ -191,8 +166,10 @@ case $VERSION in
     fi
     ;;
   *)
-    log "Zabbix $VERSION: o MCP oficial do Zabbix só existe a partir do 8.0; subindo só o MCP do Grafana"
-    log "para ter os dois, atualize com make upgrade-8 (veja \"Zabbix 8.0\" no README)"
+    log "Zabbix $VERSION: o MCP oficial do Zabbix só existe a partir do 8.0; o MCP terá só as ferramentas do Grafana"
+    log "para ter as do Zabbix também, atualize com make upgrade-8 (veja \"Zabbix 8.0\" no README)"
+    # Sem MCP do Zabbix, o gateway não deve tentar usá-lo.
+    [ -z "${ZABBIX_MCP_TOKEN:-}" ] || set_env ZABBIX_MCP_TOKEN ""
     ;;
 esac
 
@@ -218,29 +195,40 @@ else
 fi
 if [ -z "${GRAFANA_MCP_CLIENT_TOKEN:-}" ]; then
   set_env GRAFANA_MCP_CLIENT_TOKEN "$(random_token)"
-  log "token dos clientes do MCP do Grafana gerado (GRAFANA_MCP_CLIENT_TOKEN no .env)"
+  log "token interno do MCP do Grafana gerado (GRAFANA_MCP_CLIENT_TOKEN no .env)"
+fi
+if [ -z "${MCP_TOKEN:-}" ]; then
+  set_env MCP_TOKEN "$(random_token)"
+  log "token da IA gerado (MCP_TOKEN no .env)"
 fi
 
 # ---- Sobe os MCPs --------------------------------------------------------------
 # Recarrega o .env: as variáveis exportadas no início (vazias na primeira vez)
-# têm prioridade sobre o .env no docker compose e deixariam o MCP do Grafana
-# sem token.
+# têm prioridade sobre o .env no docker compose e deixariam os MCPs sem token.
 load_env
-[ -n "${GRAFANA_MCP_CLIENT_TOKEN:-}" ] && [ -n "${GRAFANA_MCP_SA_TOKEN:-}" ] || die "tokens do Grafana vazios no $ENV_FILE"
+[ -n "${MCP_TOKEN:-}" ] && [ -n "${GRAFANA_MCP_CLIENT_TOKEN:-}" ] && [ -n "${GRAFANA_MCP_SA_TOKEN:-}" ] \
+  || die "tokens vazios no $ENV_FILE"
 log "subindo: $SERVICES"
+docker compose --profile mcp build -q mcp-gateway
+# A versão anterior publicava os MCPs oficiais em 127.0.0.1; recriar tira as portas.
 # shellcheck disable=SC2086 # lista de serviços
 docker compose --profile mcp up -d --no-deps --force-recreate $SERVICES
+case $SERVICES in *zabbix-mcp*) ;; *) docker compose --profile mcp rm -sf zabbix-mcp >/dev/null 2>&1 || true ;; esac
 
-# Confere que o MCP do Grafana recusa quem não manda o token.
+# O MCP tem de recusar quem não manda o token, e responder a quem manda.
+mcp_post() { # mcp_post <json> [token] -> imprime o código HTTP
+  curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' ${2:+-H "Authorization: Bearer $2"} -d "$1" "$MCP_URL"
+}
 i=0
-until code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' \
-    -H 'Accept: application/json, text/event-stream' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$GMCP_URL") && [ "$code" != 000 ]; do
-  i=$((i + 1)); [ "$i" -ge 30 ] && die "o MCP do Grafana não respondeu em $GMCP_URL"
+until code=$(mcp_post '{"jsonrpc":"2.0","id":1,"method":"ping"}') && [ "$code" != 000 ]; do
+  i=$((i + 1)); [ "$i" -ge 30 ] && die "o MCP não respondeu em $MCP_URL; veja docker compose --profile mcp logs mcp-gateway"
   sleep 1
 done
 if [ "$code" != 401 ]; then
-  docker compose --profile mcp stop grafana-mcp
-  die "o MCP do Grafana aceitou um pedido sem token (HTTP $code); ele foi parado"
+  docker compose --profile mcp stop mcp-gateway
+  die "o MCP aceitou um pedido sem token (HTTP $code); ele foi parado"
 fi
+[ "$(mcp_post '{"jsonrpc":"2.0","id":1,"method":"ping"}' "$MCP_TOKEN")" = 200 ] || die "o MCP recusou o MCP_TOKEN; veja docker compose --profile mcp logs mcp-gateway"
+log "MCP no ar em $MCP_URL (só nesta máquina)"
 print_config

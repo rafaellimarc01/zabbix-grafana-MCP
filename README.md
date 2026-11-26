@@ -10,7 +10,7 @@ Em resumo, o projeto entrega três coisas:
 |---|---|---|
 | **Zabbix 7.0 ou 8.0 LTS** | Coleta, triggers e API. O 7.0 é o padrão; o 8.0 é opcional e testado no CI, com atualização automática do 7.0 | [Zabbix 8.0](#zabbix-80) |
 | **Grafana com o plugin do Zabbix** | Dashboards e alertas prontos, lendo o Zabbix com um usuário somente leitura | [Acesse](#6-acesse), [Alertas](#alertas) |
-| **MCP para IAs** | Servidores MCP oficiais do Zabbix e do Grafana, somente leitura e só em `127.0.0.1`, para o Claude e outras IAs na sua máquina consultarem o monitoramento | [MCP: Zabbix e Grafana para IAs](#mcp-zabbix-e-grafana-para-ias) |
+| **MCP para IAs** | Um MCP único (um endereço, um token) que junta os MCPs oficiais do Zabbix e do Grafana, somente leitura e só em `127.0.0.1`, para o Claude e outras IAs na sua máquina consultarem o monitoramento | [MCP: Zabbix e Grafana para IAs](#mcp-zabbix-e-grafana-para-ias) |
 
 Use como ponto de partida para o seu laboratório, para estudos ou como base de um ambiente real. A plataforma padrão é o **Linux**; macOS e Windows também funcionam (veja [Plataformas](#plataformas)).
 
@@ -26,8 +26,9 @@ Use como ponto de partida para o seu laboratório, para estudos ou como base de 
 | zabbix-init | `zabbix/zabbix-web-nginx-pgsql:alpine-7.0.32` | Tarefa única: cria o usuário somente leitura do Grafana e liga o agente ao host |
 | postgres-backup | `postgres:16-alpine` | Backup automático diário do banco do Zabbix (`pg_dump`), com retenção de 7 dias |
 | Grafana | `grafana/grafana:12.4.16` | Dashboards, com o plugin [Zabbix para Grafana](https://grafana.com/grafana/plugins/alexanderzobnin-zabbix-app/) 6.12.0 |
-| zabbix-mcp (opcional) | `zabbix/zabbix-mcp-server:alpine-8.0.0` | MCP oficial do Zabbix, somente leitura (perfil `mcp`, precisa do Zabbix 8.0) |
-| grafana-mcp (opcional) | `grafana/mcp-grafana:2.4.0` | MCP oficial do Grafana, somente leitura (perfil `mcp`) |
+| mcp-gateway (opcional) | `zabbix-grafana-mcp:local` (feita de `mcp-gateway/`) | MCP único que a IA usa: junta os dois abaixo (perfil `mcp`) |
+| zabbix-mcp (opcional) | `zabbix/zabbix-mcp-server:alpine-8.0.0` | MCP oficial do Zabbix, somente leitura, só na rede interna (perfil `mcp`, precisa do Zabbix 8.0) |
+| grafana-mcp (opcional) | `grafana/mcp-grafana:2.4.0` | MCP oficial do Grafana, somente leitura, só na rede interna (perfil `mcp`) |
 
 O padrão é o Zabbix 7.0 LTS. O Zabbix 8.0 LTS também é suportado e testado no CI: veja [Zabbix 8.0](#zabbix-80).
 
@@ -54,10 +55,11 @@ Alertas incluídos (pasta **Zabbix** em **Alerting → Alert rules**): host indi
 │       ├── local/              # NodePort, para kind/minikube/k3d/Docker Desktop
 │       ├── gateway/            # Gateway API com HTTPS (recomendado)
 │       └── ingress/            # Ingress com HTTPS (Traefik por padrão)
+├── mcp-gateway/                # MCP único para as IAs (Python, só biblioteca padrão)
 ├── scripts/
 │   ├── zabbix-init.sh          # configuração inicial via API do Zabbix
 │   ├── upgrade-zabbix-8.sh     # atualiza do Zabbix 7.0 para o 8.0 (make upgrade-8)
-│   ├── mcp-setup.sh            # sobe os MCPs e cria os tokens (make mcp)
+│   ├── mcp-setup.sh            # sobe o MCP e cria os tokens (make mcp)
 │   ├── postgres-backup.sh      # backup automático e restauração do banco
 │   ├── zabbix-admin-password.sh # troca a senha padrão do Admin no banco
 │   ├── generate-secrets.sh     # gera .env / secrets.env com senhas aleatórias
@@ -537,24 +539,33 @@ Para voltar, restaure o backup como em [Backup do banco → Kubernetes](#kuberne
 
 O [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) é o padrão que o Claude, o ChatGPT e outras IAs usam para acessar ferramentas. Com ele, você pergunta em português "quais problemas estão abertos no Zabbix?" ou "me mostra o dashboard do host X" e a IA consulta o seu ambiente.
 
-O modelo usa os dois servidores MCP **oficiais**, um de cada lado:
+A IA conecta em **um MCP só**, o `mcp-gateway`, com **um token**. Por trás dele ficam os dois servidores MCP **oficiais**, sem porta nenhuma para fora:
 
-| MCP | Porta | O que a IA consegue fazer | Credencial |
+```
+IA (Claude Code, Claude Desktop...) ──> 127.0.0.1:8765/mcp  mcp-gateway (token MCP_TOKEN)
+                                              ├──> zabbix-mcp   (rede interna)  ──> API do Zabbix
+                                              └──> grafana-mcp  (rede interna)  ──> API do Grafana
+```
+
+| Ferramentas | Vêm de | O que a IA consegue fazer | Credencial usada por dentro |
 |---|---|---|---|
-| Zabbix ([`zabbix/zabbix-mcp-server`](https://hub.docker.com/r/zabbix/zabbix-mcp-server)) | `127.0.0.1:8443` | Ler hosts, grupos, problemas, triggers, templates e manutenções | Token de API do usuário `mcp` do Zabbix |
-| Grafana ([`grafana/mcp-grafana`](https://github.com/grafana/mcp-grafana)) | `127.0.0.1:8000` | Buscar e ler dashboards, rodar a consulta de um painel (dados do Zabbix pelo plugin), ler regras de alerta, anotações e datasources, gerar links | Service account `mcp` (Viewer) do Grafana |
+| `zabbix_*` | [`zabbix/zabbix-mcp-server`](https://hub.docker.com/r/zabbix/zabbix-mcp-server) | Ler hosts, grupos, problemas, triggers, templates e manutenções | Token de API do usuário `mcp` do Zabbix |
+| `grafana_*` | [`grafana/mcp-grafana`](https://github.com/grafana/mcp-grafana) | Buscar e ler dashboards, rodar a consulta de um painel (dados do Zabbix pelo plugin), ler regras de alerta, anotações e datasources, gerar links | Service account `mcp` (Viewer) do Grafana |
+
+O `mcp-gateway` é código deste repositório (`mcp-gateway/gateway.py`), em Python só com a biblioteca padrão, para ser fácil de auditar. Ferramentas que cruzam Zabbix, Grafana e Kubernetes e a versão para Kubernetes vêm nas próximas versões.
 
 **Segurança por padrão**
 
-- **Nenhuma porta exposta:** os dois só escutam em `127.0.0.1`, mesmo que você mude o `BIND_ADDRESS`. São para IAs rodando na mesma máquina.
+- **Nenhuma porta exposta:** só o `mcp-gateway` tem porta, e só em `127.0.0.1`, mesmo que você mude o `BIND_ADDRESS`. Os MCPs oficiais não publicam porta. Ele também recusa pedidos com `Host` ou `Origin` de outro site (proteção contra DNS rebinding).
+- **Um token para a IA:** o `MCP_TOKEN`. Os tokens do Zabbix e do Grafana ficam só dentro dos containers e nunca vão para a IA.
 - **Somente leitura:** no Zabbix só ficam as ferramentas `*_get` (reconhecer problema, criar manutenção etc. ficam de fora), e as que devolvem chaves de itens, macros, interfaces e histórico bruto também, porque costumam ter segredos. No Grafana, `--disable-write` e só as ferramentas de dashboards, alertas, anotações, datasources e busca.
 - **Usuários próprios:** o usuário `mcp` do Zabbix é do tipo User, sem acesso à interface web e só com leitura; tudo o que a IA faz aparece no log de auditoria do Zabbix com o nome dele. A service account `mcp` do Grafana é Viewer.
-- **Token obrigatório nos dois:** o MCP do Zabbix não guarda credencial (cada pedido traz o token de API) e o do Grafana exige o `GRAFANA_MCP_CLIENT_TOKEN`.
-- O MCP do Grafana sobe com `DO_NOT_TRACK=1` (sem estatísticas de uso).
+- **Defesa em profundidade:** mesmo na rede interna, o MCP do Grafana exige o seu próprio token (`GRAFANA_MCP_CLIENT_TOKEN`) e o do Zabbix exige o token de API.
+- O MCP do Grafana sobe com `DO_NOT_TRACK=1` (sem estatísticas de uso). O `mcp-gateway` não registra tokens nem argumentos nos logs, só o nome da ferramenta chamada.
 
-**Requisito:** o MCP oficial do Zabbix só existe a partir do **Zabbix 8.0**. No 7.0, o `make mcp` sobe só o do Grafana e avisa; para ter os dois, atualize com `make upgrade-8` (veja [Zabbix 8.0](#zabbix-80)).
+**Requisito:** o MCP oficial do Zabbix só existe a partir do **Zabbix 8.0**. No 7.0, o `make mcp` sobe o MCP só com as ferramentas do Grafana e avisa; para ter as do Zabbix também, atualize com `make upgrade-8` (veja [Zabbix 8.0](#zabbix-80)).
 
-### Subindo os MCPs
+### Subindo o MCP
 
 Com o ambiente no ar (`make up`):
 
@@ -562,37 +573,30 @@ Com o ambiente no ar (`make up`):
 make mcp        # sem make: ./scripts/mcp-setup.sh
 ```
 
-Na primeira vez ele cria o usuário `mcp` e o token de API no Zabbix, a service account `mcp` e o token no Grafana, gera o token dos clientes, grava os três no `.env` (`ZABBIX_MCP_TOKEN`, `GRAFANA_MCP_SA_TOKEN`, `GRAFANA_MCP_CLIENT_TOKEN`) e sobe os containers `zabbix-mcp` e `grafana-mcp`. Depois mostra os comandos prontos para cada cliente, já com os tokens. Rodar de novo é seguro: os tokens que ainda funcionam são mantidos. Para ver as instruções outra vez: `make mcp-config`.
+Na primeira vez ele cria o usuário `mcp` e o token de API no Zabbix, a service account `mcp` e o token no Grafana, gera o token interno do MCP do Grafana e o token da IA, grava tudo no `.env` (`MCP_TOKEN`, `ZABBIX_MCP_TOKEN`, `GRAFANA_MCP_SA_TOKEN`, `GRAFANA_MCP_CLIENT_TOKEN`), constrói a imagem do `mcp-gateway` e sobe os três containers. No fim ele confere que o MCP recusa pedido sem token e mostra os comandos prontos para cada cliente. Rodar de novo é seguro: os tokens que ainda funcionam são mantidos. Para ver as instruções outra vez: `make mcp-config`.
 
-Os tokens dão acesso de leitura a todo o monitoramento: trate-os como senhas. Para trocar todos, apague as três linhas do `.env` e rode `make mcp` de novo.
+O `MCP_TOKEN` dá acesso de leitura a todo o monitoramento: trate-o como senha. Para trocar os tokens, apague as linhas deles no `.env` e rode `make mcp` de novo.
 
 ### Conectando o Claude Code
 
 ```bash
-claude mcp add --transport http zabbix http://127.0.0.1:8443/mcp \
-  --header "Authorization: Bearer <ZABBIX_MCP_TOKEN>"
-claude mcp add --transport http grafana http://127.0.0.1:8000/mcp \
-  --header "Authorization: Bearer <GRAFANA_MCP_CLIENT_TOKEN>"
+claude mcp add --transport http zabbix-grafana http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer <MCP_TOKEN>"
 ```
 
 Confira com `claude mcp list` e pergunte, por exemplo: "Quais problemas estão abertos no Zabbix e qual dashboard do Grafana mostra esse host?".
 
 ### Conectando o Claude Desktop
 
-O Claude Desktop conversa com servidores locais pelo `stdio`; a ponte para os MCPs HTTP é o [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), que precisa do [Node.js](https://nodejs.org/). Em **Settings → Developer → Edit Config**, junte ao `claude_desktop_config.json` (o `make mcp-config` mostra este bloco já com os seus tokens) e reinicie o Claude Desktop:
+O Claude Desktop conversa com servidores locais pelo `stdio`; a ponte para o MCP HTTP é o [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), que precisa do [Node.js](https://nodejs.org/). Em **Settings → Developer → Edit Config**, junte ao `claude_desktop_config.json` (o `make mcp-config` mostra este bloco já com o seu token) e reinicie o Claude Desktop:
 
 ```json
 {
   "mcpServers": {
-    "zabbix": {
+    "zabbix-grafana": {
       "command": "npx",
-      "args": ["-y", "mcp-remote@0.16.7", "http://127.0.0.1:8443/mcp", "--header", "Authorization:${AUTH}"],
-      "env": {"AUTH": "Bearer <ZABBIX_MCP_TOKEN>"}
-    },
-    "grafana": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote@0.16.7", "http://127.0.0.1:8000/mcp", "--header", "Authorization:${AUTH}"],
-      "env": {"AUTH": "Bearer <GRAFANA_MCP_CLIENT_TOKEN>"}
+      "args": ["-y", "mcp-remote@0.16.7", "http://127.0.0.1:8765/mcp", "--header", "Authorization:${AUTH}"],
+      "env": {"AUTH": "Bearer <MCP_TOKEN>"}
     }
   }
 }
@@ -600,13 +604,13 @@ O Claude Desktop conversa com servidores locais pelo `stdio`; a ponte para os MC
 
 ### Outros clientes
 
-Qualquer cliente que aceite servidor MCP por HTTP (streamable) com cabeçalho `Authorization: Bearer <token>` funciona: Codex, VS Code, Cursor e outros. Use as mesmas URLs e tokens acima.
+Qualquer cliente que aceite servidor MCP por HTTP (streamable) com cabeçalho `Authorization: Bearer <token>` funciona: Codex, VS Code, Cursor e outros. Use `http://127.0.0.1:8765/mcp` e o `MCP_TOKEN`.
 
 **ChatGPT e Claude na web ou no celular** precisam de uma URL HTTPS pública, que este modo local não oferece de propósito. O suporte a eles, com login OAuth e um túnel de saída opcional (sem abrir portas no roteador), está planejado para uma próxima versão.
 
-**Docker Compose, não Kubernetes:** por enquanto os MCPs vêm só no Compose.
+**Docker Compose, não Kubernetes:** por enquanto o MCP vem só no Compose; a versão para Kubernetes está planejada.
 
-**Para desligar:** `docker compose --profile mcp stop zabbix-mcp grafana-mcp`. O `make up` normal não sobe os MCPs.
+**Para mudar a porta:** `MCP_PORT` no `.env` e `make mcp` de novo. **Para desligar:** `docker compose --profile mcp stop mcp-gateway zabbix-mcp grafana-mcp`. O `make up` normal não sobe o MCP.
 
 ## Personalizando
 
@@ -642,8 +646,8 @@ O modelo já vem endurecido: nenhuma senha padrão, containers sem root e sem ca
 | No Kubernetes, Zabbix/Grafana dão 502/504 pelo Gateway ou Ingress | A NetworkPolicy não reconheceu o namespace do controlador; rotule-o com `zabbix-grafana/ingress-controller=true` |
 | `make: command not found` no Mac | Rode `xcode-select --install` (ou use `./scripts/generate-secrets.sh` e `docker compose up -d`) |
 | `postgres-backup` aparece como `unhealthy` | Nenhum backup nas últimas 25 h; veja `docker compose logs postgres-backup` (disco cheio ou senha do banco errada) |
-| `make mcp` diz que o MCP do Zabbix precisa do 8.0 | O MCP oficial do Zabbix só existe no 8.0; atualize com `make upgrade-8` |
-| O Claude não lista as ferramentas do MCP | Confira se os containers estão no ar (`docker compose --profile mcp ps`) e se o token é o do `make mcp-config`; no Claude Desktop, o Node.js precisa estar instalado |
+| `make mcp` diz que o MCP do Zabbix precisa do 8.0 | O MCP oficial do Zabbix só existe no 8.0; sem ele o MCP só tem as ferramentas `grafana_*`. Atualize com `make upgrade-8` |
+| O Claude não lista as ferramentas do MCP | Confira se os containers estão no ar (`docker compose --profile mcp ps`) e se o token é o `MCP_TOKEN` do `make mcp-config`; no Claude Desktop, o Node.js precisa estar instalado. Os logs ficam em `docker compose --profile mcp logs mcp-gateway` |
 | Não consigo abrir o Zabbix/Grafana de outra máquina | Por padrão eles só escutam em `127.0.0.1`; veja `BIND_ADDRESS` no `.env` |
 
 ## Contribuindo
