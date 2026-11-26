@@ -72,6 +72,15 @@ random_token() {
     [ "${#t}" -eq 40 ] && { echo "$t"; return; }
   done
 }
+# Senha do usuário "mcp" do Zabbix: o Zabbix recusa senhas que contêm o nome,
+# o usuário ou palavras como "zabbix" e "admin" (de vez em quando um token
+# aleatório contém "mcp" ou "ias", de "MCP (IAs)").
+random_password() {
+  while :; do
+    t=$(random_token)
+    printf '%s' "$t" | grep -qiE 'mcp|ias|zabbix|admin' || { echo "$t"; return; }
+  done
+}
 
 # ---- JSON sem jq (mesmas funções do zabbix-init.sh) --------------------------
 str() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"; }
@@ -83,7 +92,7 @@ zcall() {
     -d "{\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2,\"id\":1}" "$ZABBIX_API"
 }
 zcheck() {
-  case $1 in *'"error":{'*) die "Zabbix: falha ao $2: $(field "$1" data)" ;; esac
+  case $1 in *'"error":{'*) die "Zabbix: falha ao $2: $(printf '%s' "$1" | sed -n 's/^.*"data":"\(.*\)".*$/\1/p')" ;; esac
 }
 gcall() { # gcall <método> <caminho> [json]
   curl -fsS -u "$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD" -H 'Content-Type: application/json' \
@@ -167,7 +176,7 @@ case $VERSION in
       if [ -z "$USERID" ]; then
         # Senha aleatória que ninguém usa: o acesso é só pelo token de API, e o
         # grupo não entra na interface web.
-        RESP=$(zcall user.create "{\"username\":\"$MCP_USER\",\"name\":\"MCP (IAs)\",\"passwd\":\"$(random_token)\",\"roleid\":\"$ROLEID\",\"usrgrps\":[{\"usrgrpid\":\"$GROUPID\"}]}" "$ADMIN")
+        RESP=$(zcall user.create "{\"username\":\"$MCP_USER\",\"name\":\"MCP (IAs)\",\"passwd\":\"$(random_password)\",\"roleid\":\"$ROLEID\",\"usrgrps\":[{\"usrgrpid\":\"$GROUPID\"}]}" "$ADMIN")
         zcheck "$RESP" "criar o usuário '$MCP_USER'"
         USERID=$(printf '%s' "$RESP" | sed -n 's/^.*"userids":\["\([0-9]*\)".*$/\1/p')
         log "Zabbix: usuário '$MCP_USER' (somente leitura) criado"
