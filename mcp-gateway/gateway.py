@@ -1,7 +1,8 @@
 """MCP único do modelo zabbix-grafana: um só endereço e um só token para a IA.
 
-Junta as ferramentas dos MCPs oficiais do Zabbix e do Grafana, que ficam só na
-rede interna, e as entrega com os prefixos "zabbix_" e "grafana_". Fala o
+Junta as ferramentas dos MCPs oficiais do Zabbix e do Grafana (e, no
+Kubernetes, do MCP de Kubernetes), que ficam só na rede interna, e as entrega
+com os prefixos "zabbix_", "grafana_" e "k8s_". Fala o
 transporte HTTP "streamable" do MCP no modo sem sessão: cada POST em /mcp
 recebe uma resposta JSON.
 
@@ -16,6 +17,12 @@ auditar. Configuração por variáveis de ambiente (veja o README):
   ZABBIX_MCP_TOKEN       token de API do Zabbix do usuário "mcp"
   GRAFANA_MCP_URL        MCP oficial do Grafana (vazio = desligado)
   GRAFANA_MCP_TOKEN      token que o MCP do Grafana exige
+  KUBERNETES_MCP_URL     MCP de Kubernetes (vazio = desligado); vai sem token,
+                         porque usa a ServiceAccount do próprio pod
+
+Cada *_MCP_TOKEN também pode vir de um arquivo, em *_MCP_TOKEN_FILE (lido a
+cada pedido; arquivo vazio = aquele MCP fica desligado). É assim no Kubernetes,
+onde os tokens são criados quando o pod sobe.
 """
 
 from __future__ import annotations
@@ -40,12 +47,21 @@ MAX_REQUEST = 1 * 1024 * 1024
 MAX_UPSTREAM_RESPONSE = 8 * 1024 * 1024
 UPSTREAM_TIMEOUT = 60
 TOOLS_CACHE_SECONDS = 60
+RETRY_SECONDS = 5
 
 INSTRUCTIONS = (
     "Monitoramento somente leitura. Ferramentas zabbix_* consultam o Zabbix "
     "(hosts, problemas, triggers, eventos); grafana_* consultam o Grafana "
     "(dashboards, datasources, alertas e consulta de painéis, inclusive os "
-    "dados do Zabbix pelo plugin). Nenhuma ferramenta altera configuração."
+    "dados do Zabbix pelo plugin); k8s_* (quando existem) leem pods, eventos, "
+    "logs e recursos do namespace do monitoramento no Kubernetes. Nenhuma "
+    "ferramenta altera configuração."
+)
+# nome -> (prefixo das variáveis, prefixo das ferramentas, exige token)
+UPSTREAMS = (
+    ("zabbix", "ZABBIX", "zabbix_", True),
+    ("grafana", "GRAFANA", "grafana_", True),
+    ("kubernetes", "KUBERNETES", "k8s_", False),
 )
 
 log = logging.getLogger("mcp-gateway")
@@ -89,23 +105,44 @@ def parse_response(body: bytes, content_type: str, request_id: object) -> dict |
 class Upstream:
     """Cliente mínimo de um MCP HTTP streamable (sessão, SSE, reconexão)."""
 
-    def __init__(self, name: str, url: str, token: str):
+    def __init__(self, name: str, url: str, token: str = "", token_file: str = "", prefix: str = ""):
         self.name = name
-        self.prefix = name + "_"
+        self.prefix = prefix or name + "_"
         self.url = url
-        self.token = token
+        self._token = token
+        self.token_file = token_file
         self.session_id: str | None = None
         self.protocol_version = PROTOCOL_VERSIONS[0]
         self._lock = threading.Lock()
         self._next_id = 0
 
+    @property
+    def token(self) -> str:
+        if self.token_file:
+            try:
+                with open(self.token_file, encoding="utf-8") as f:
+                    return f.read().strip()
+            except OSError:
+                return ""
+        return self._token
+
+    @property
+    def needs_token(self) -> bool:
+        return bool(self._token or self.token_file)
+
+    def enabled(self) -> bool:
+        """Sem token (Zabbix 7.0, por exemplo), o MCP fica de fora."""
+        return not self.needs_token or bool(self.token)
+
     def _post(self, payload: dict) -> tuple[int, dict, bytes]:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
-            "Authorization": "Bearer " + self.token,
             "MCP-Protocol-Version": self.protocol_version,
         }
+        token = self.token
+        if token:
+            headers["Authorization"] = "Bearer " + token
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
         req = urllib.request.Request(self.url, data=json.dumps(payload).encode(), headers=headers, method="POST")
@@ -206,12 +243,15 @@ class Gateway:
     def tools(self, refresh: bool = False) -> list[dict]:
         with self._lock:
             if refresh or time.monotonic() - self._loaded_at > TOOLS_CACHE_SECONDS:
-                tools, routes = [], {}
+                tools, routes, failed = [], {}, False
                 for up in self.upstreams:
+                    if not up.enabled():
+                        continue
                     try:
                         listed = up.list_tools()
                     except (UpstreamError, RpcError) as err:
                         log.warning("ferramentas de %s indisponíveis: %s", up.name, err)
+                        failed = True
                         continue
                     for tool in listed:
                         name = up.prefix + tool["name"]
@@ -222,7 +262,9 @@ class Gateway:
                         tools.append(exposed)
                         routes[name] = (up, tool["name"])
                 self._tools, self._routes = tools, routes
-                self._loaded_at = time.monotonic()
+                # Se algum MCP interno ainda não respondeu (subindo junto com o
+                # gateway, por exemplo), tenta de novo em poucos segundos.
+                self._loaded_at = time.monotonic() - (TOOLS_CACHE_SECONDS - RETRY_SECONDS if failed else 0)
             return list(self._tools)
 
     def call_tool(self, name: str, arguments: dict) -> dict:
@@ -382,21 +424,24 @@ class Handler(BaseHTTPRequestHandler):
 
 def build_upstreams(env: dict) -> list[Upstream]:
     upstreams = []
-    for name in ("zabbix", "grafana"):
-        url = env.get(f"{name.upper()}_MCP_URL", "").strip()
-        token = env.get(f"{name.upper()}_MCP_TOKEN", "").strip()
-        if url and token:
-            upstreams.append(Upstream(name, url, token))
-        elif url:
-            log.warning("%s desligado: %s_MCP_TOKEN vazio", name, name.upper())
+    for name, var, prefix, token_required in UPSTREAMS:
+        url = env.get(f"{var}_MCP_URL", "").strip()
+        token = env.get(f"{var}_MCP_TOKEN", "").strip()
+        token_file = env.get(f"{var}_MCP_TOKEN_FILE", "").strip()
+        if not url:
+            continue
+        if token_required and not (token or token_file):
+            log.warning("%s desligado: %s_MCP_TOKEN vazio", name, var)
+            continue
+        upstreams.append(Upstream(name, url, token, token_file, prefix))
     return upstreams
 
 
 def main() -> int:
     logging.basicConfig(level=os.environ.get("MCP_LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     token = os.environ.get("MCP_TOKEN", "")
-    if len(token) < 32:
-        log.error("MCP_TOKEN precisa ter pelo menos 32 caracteres; rode make mcp")
+    if len(token) < 24:
+        log.error("MCP_TOKEN precisa ter pelo menos 24 caracteres (Docker: make mcp; Kubernetes: MCP_PASSWORD no secrets.env)")
         return 1
     upstreams = build_upstreams(dict(os.environ))
     if not upstreams:

@@ -4,6 +4,9 @@
 #
 #   ./scripts/mcp-setup.sh           -> cria as credenciais e sobe o MCP
 #   ./scripts/mcp-setup.sh config    -> só mostra como configurar os clientes
+#   ./scripts/mcp-setup.sh k8s-config -> o mesmo para o MCP no Kubernetes
+#                                        (componente kubernetes/components/mcp,
+#                                        acessado com make k8s-mcp)
 #
 # A IA conecta só no mcp-gateway (um endereço, um token). Por trás dele ficam
 # os MCPs oficiais do Zabbix e do Grafana, sem porta publicada.
@@ -26,11 +29,21 @@ ENV_FILE=.env
 log() { echo "[mcp] $*"; }
 die() { echo "[mcp] ERRO: $*" >&2; exit 1; }
 
-[ -f "$ENV_FILE" ] || die "não achei o $ENV_FILE; rode make env e make up"
-command -v curl >/dev/null || die "curl não encontrado"
-
-# shellcheck source=/dev/null
-load_env() { set -a; . "./$ENV_FILE"; set +a; }
+MODE=${1:-setup}
+if [ "$MODE" = k8s-config ]; then
+  # No Kubernetes o token das IAs é o MCP_PASSWORD do secrets.env e o acesso é
+  # pelo port-forward do make k8s-mcp (127.0.0.1:8765).
+  ENV_FILE=kubernetes/base/secrets.env
+  [ -f "$ENV_FILE" ] || die "não achei o $ENV_FILE; rode make k8s-secrets"
+  MCP_TOKEN=$(sed -n 's/^MCP_PASSWORD=//p' "$ENV_FILE" | tail -n 1)
+  [ -n "$MCP_TOKEN" ] || die "MCP_PASSWORD vazio no $ENV_FILE (veja \"MCP no Kubernetes\" no README)"
+  load_env() { :; }
+else
+  [ -f "$ENV_FILE" ] || die "não achei o $ENV_FILE; rode make env e make up"
+  command -v curl >/dev/null || die "curl não encontrado"
+  # shellcheck source=/dev/null
+  load_env() { set -a; . "./$ENV_FILE"; set +a; }
+fi
 load_env
 
 ZABBIX_API="http://127.0.0.1:${ZABBIX_WEB_PORT:-8080}/api_jsonrpc.php"
@@ -108,12 +121,20 @@ e reinicie o Claude Desktop:
 Servidor MCP HTTP (streamable): $MCP_URL
 Cabeçalho: Authorization: Bearer <MCP_TOKEN do .env>
 EOF
-  [ -n "${ZABBIX_MCP_TOKEN:-}" ] || echo "(As ferramentas zabbix_* precisam do Zabbix 8.0; veja \"Zabbix 8.0\" no README.)"
+  if [ "$MODE" = k8s-config ]; then
+    echo "Antes de usar, deixe rodando em outro terminal: make k8s-mcp"
+  elif [ -z "${ZABBIX_MCP_TOKEN:-}" ]; then
+    echo "(As ferramentas zabbix_* precisam do Zabbix 8.0; veja \"Zabbix 8.0\" no README.)"
+  fi
   echo
-  echo "Para ver isto de novo: make mcp-config"
+  if [ "$MODE" = k8s-config ]; then echo "Para ver isto de novo: make k8s-mcp-config"; else echo "Para ver isto de novo: make mcp-config"; fi
 }
 
-if [ "${1:-}" = config ]; then
+if [ "$MODE" = k8s-config ]; then
+  print_config
+  exit 0
+fi
+if [ "$MODE" = config ]; then
   [ -n "${MCP_TOKEN:-}" ] || die "o MCP ainda não foi configurado; rode make mcp"
   print_config
   exit 0

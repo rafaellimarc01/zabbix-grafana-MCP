@@ -61,6 +61,13 @@ aos respectivos projetos.
   ficam no `.env` (permissão 600, fora do Git).
 - Fica com você: não expor essa porta na rede e não colar os tokens em
   chats ou prints.
+- No Kubernetes (componente `mcp`): Service só `ClusterIP`, nenhum outro pod
+  alcança o pod `mcp` (NetworkPolicy) e os MCPs internos só escutam em
+  `127.0.0.1` dentro do pod. O MCP de Kubernetes é só leitura, usa a
+  ServiceAccount `mcp` com o papel `view` apenas no namespace `monitoring`
+  (sem Secrets, que também ficam bloqueados na configuração dele) e nunca
+  repassa o token de quem chama. Os tokens do Zabbix e do Grafana ficam num
+  volume em memória e são trocados a cada reinício do pod.
 
 **CI**
 - Token do GitHub só com leitura, Actions fixadas por SHA e atualizadas pelo

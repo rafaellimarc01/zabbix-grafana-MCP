@@ -94,6 +94,11 @@ jobs:
           for o in local ingress gateway; do
             kubectl kustomize "kubernetes/overlays/$o" > "rendered/$o.yaml"
           done
+          # Componentes opcionais (Zabbix 8.0 e MCP) sobre o overlay local.
+          mkdir -p kubernetes/overlays/ci-mcp
+          printf 'namespace: monitoring\nresources: [../local]\ncomponents: [../../components/zabbix-8, ../../components/mcp]\n' \
+            > kubernetes/overlays/ci-mcp/kustomization.yaml
+          kubectl kustomize kubernetes/overlays/ci-mcp > rendered/mcp.yaml
 
       # Exceções aceitas, cada uma presa a um recurso: .github/trivy-ignore.rego
       - name: Trivy config (HIGH e CRITICAL)
@@ -118,9 +123,10 @@ jobs:
 
       - name: Trivy image (HIGH e CRITICAL com correção disponível)
         run: |
-          # Lê nome e tag do bloco "images:" do kustomization.yaml
-          images=$(awk '/^images:/{f=1;next} f&&/^[^ ]/{f=0} f&&/- name:/{n=$3} f&&/newTag:/{print n":"$2}' \
-            kubernetes/base/kustomization.yaml)
+          # Lê nome e tag do bloco "images:" da base e dos componentes (sem repetir)
+          images=$(for k in kubernetes/base/kustomization.yaml kubernetes/components/*/kustomization.yaml; do
+            awk '/^images:/{f=1;next} f&&/^[^ ]/{f=0} f&&/- name:/{n=$3} f&&/newTag:/{print n":"$2}' "$k"
+          done | sort -u)
           test -n "$images"
           {
             echo "## Vulnerabilidades nas imagens"

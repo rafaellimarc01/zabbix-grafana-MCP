@@ -51,6 +51,7 @@ Alertas incluídos (pasta **Zabbix** em **Alerting → Alert rules**): host indi
 │   ├── base/                   # manifests (Kustomize)
 │   ├── tools/                  # pod temporário para copiar/restaurar backups
 │   ├── components/zabbix-8/    # troca o Zabbix 7.0 pelo 8.0
+│   ├── components/mcp/         # MCP único para IAs no Kubernetes (opcional)
 │   └── overlays/
 │       ├── local/              # NodePort, para kind/minikube/k3d/Docker Desktop
 │       ├── gateway/            # Gateway API com HTTPS (recomendado)
@@ -552,7 +553,7 @@ IA (Claude Code, Claude Desktop...) ──> 127.0.0.1:8765/mcp  mcp-gateway (tok
 | `zabbix_*` | [`zabbix/zabbix-mcp-server`](https://hub.docker.com/r/zabbix/zabbix-mcp-server) | Ler hosts, grupos, problemas, triggers, templates e manutenções | Token de API do usuário `mcp` do Zabbix |
 | `grafana_*` | [`grafana/mcp-grafana`](https://github.com/grafana/mcp-grafana) | Buscar e ler dashboards, rodar a consulta de um painel (dados do Zabbix pelo plugin), ler regras de alerta, anotações e datasources, gerar links | Service account `mcp` (Viewer) do Grafana |
 
-O `mcp-gateway` é código deste repositório (`mcp-gateway/gateway.py`), em Python só com a biblioteca padrão, para ser fácil de auditar. Ferramentas que cruzam Zabbix, Grafana e Kubernetes e a versão para Kubernetes vêm nas próximas versões.
+O `mcp-gateway` é código deste repositório (`mcp-gateway/gateway.py`), em Python só com a biblioteca padrão, para ser fácil de auditar. No Kubernetes ele também traz as ferramentas `k8s_*` (veja [MCP no Kubernetes](#mcp-no-kubernetes)). Ferramentas que cruzam Zabbix, Grafana e Kubernetes numa pergunta só vêm na próxima versão.
 
 **Segurança por padrão**
 
@@ -608,9 +609,43 @@ Qualquer cliente que aceite servidor MCP por HTTP (streamable) com cabeçalho `A
 
 **ChatGPT e Claude na web ou no celular** precisam de uma URL HTTPS pública, que este modo local não oferece de propósito. O suporte a eles, com login OAuth e um túnel de saída opcional (sem abrir portas no roteador), está planejado para uma próxima versão.
 
-**Docker Compose, não Kubernetes:** por enquanto o MCP vem só no Compose; a versão para Kubernetes está planejada.
-
 **Para mudar a porta:** `MCP_PORT` no `.env` e `make mcp` de novo. **Para desligar:** `docker compose --profile mcp stop mcp-gateway zabbix-mcp grafana-mcp`. O `make up` normal não sobe o MCP.
+
+### MCP no Kubernetes
+
+No Kubernetes, o MCP é o componente opcional `kubernetes/components/mcp`. Ele sobe **um pod `mcp`** com o `mcp-gateway` e, dentro do mesmo pod, só em `127.0.0.1`, os MCPs oficiais do Zabbix e do Grafana e o [MCP de Kubernetes](https://github.com/containers/kubernetes-mcp-server) (`containers/kubernetes-mcp-server`). A IA continua usando um endereço e um token, e ganha as ferramentas `k8s_*`:
+
+| Ferramentas | O que a IA consegue fazer | Com que permissão |
+|---|---|---|
+| `zabbix_*`, `grafana_*` | As mesmas do Docker Compose | Usuário `mcp` do Zabbix e service account `mcp` do Grafana, com tokens novos a cada start do pod |
+| `k8s_*` | Listar e ler pods, logs, eventos e outros recursos do namespace `monitoring` | ServiceAccount `mcp` com o papel `view` **só neste namespace** (não lê Secrets nem outros namespaces) |
+
+**Segurança:** o Service `mcp` é só `ClusterIP` (nada sai do cluster) e nenhum outro pod consegue falar com ele (NetworkPolicy). O MCP de Kubernetes roda com `read_only`, nunca usa um token vindo de quem chama e ainda bloqueia Secrets na própria configuração (`kubernetes/components/mcp/kubernetes-mcp.toml`). O token da ServiceAccount só é montado no container dele. Os tokens do Zabbix e do Grafana ficam num volume em memória do pod e são trocados a cada reinício.
+
+**Como ligar:**
+
+1. As ferramentas do Zabbix precisam do Zabbix 8.0. No `kustomization.yaml` do seu overlay (`local`, `gateway` ou `ingress`), acrescente:
+
+   ```yaml
+   components:
+     - ../../components/zabbix-8
+     - ../../components/mcp
+   ```
+
+2. O token das IAs é o `MCP_PASSWORD` do `kubernetes/base/secrets.env` (o `make k8s-secrets` já cria). Se o seu `secrets.env` é de antes desta versão, acrescente a linha:
+
+   ```bash
+   echo "MCP_PASSWORD=$(head -c 512 /dev/urandom | LC_ALL=C tr -dc A-Za-z0-9 | head -c 32)" >> kubernetes/base/secrets.env
+   ```
+
+3. Aplique (`make k8s-apply`) e, numa janela que fica aberta, ligue o acesso local:
+
+   ```bash
+   make k8s-mcp          # kubectl port-forward: 127.0.0.1:8765 -> svc/mcp
+   make k8s-mcp-config   # mostra os comandos do Claude Code e do Claude Desktop
+   ```
+
+A configuração dos clientes é a mesma do Docker Compose (`http://127.0.0.1:8765/mcp`), só muda o token. Se o MCP do Docker Compose também estiver rodando na mesma máquina, pare um dos dois, porque os dois usam a porta 8765. Para conferir: `kubectl -n monitoring logs deploy/mcp -c mcp-init` e `-c gateway`.
 
 ## Personalizando
 

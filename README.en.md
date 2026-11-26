@@ -80,7 +80,9 @@ Claude Code:
 claude mcp add --transport http zabbix-grafana http://127.0.0.1:8765/mcp --header "Authorization: Bearer <MCP_TOKEN>"
 ```
 
-Claude Desktop uses [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node.js); `make mcp-config` prints the `claude_desktop_config.json` block. ChatGPT and Claude on the web need a public HTTPS URL, which this local mode deliberately does not provide; OAuth plus an optional outbound tunnel is planned, as are cross-system tools (Zabbix, Grafana and Kubernetes) and a Kubernetes version. MCP is Docker Compose only for now.
+Claude Desktop uses [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) (needs Node.js); `make mcp-config` prints the `claude_desktop_config.json` block. ChatGPT and Claude on the web need a public HTTPS URL, which this local mode deliberately does not provide; OAuth plus an optional outbound tunnel is planned, as are cross-system tools (Zabbix, Grafana and Kubernetes).
+
+**Kubernetes:** add `../../components/zabbix-8` and `../../components/mcp` under `components:` in your overlay. It runs one `mcp` pod with the gateway and, inside the pod on `127.0.0.1` only, the official Zabbix and Grafana MCP servers plus [`containers/kubernetes-mcp-server`](https://github.com/containers/kubernetes-mcp-server), which adds read-only `k8s_*` tools (pods, logs, events and resources) through a ServiceAccount bound to the `view` role in the `monitoring` namespace only (no Secrets). The Service is ClusterIP only and no other pod may reach it. The assistant token is `MCP_PASSWORD` in `kubernetes/base/secrets.env`; then run `make k8s-mcp` (port-forward to `127.0.0.1:8765`) and `make k8s-mcp-config`.
 
 ## Kubernetes on Linux
 
