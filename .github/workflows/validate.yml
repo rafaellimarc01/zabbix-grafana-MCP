@@ -73,9 +73,13 @@ jobs:
           # Gateway e HTTPRoute (overlay gateway) vêm de CRDs: o esquema sai do
           # catálogo de CRDs do datree.
           for o in local ingress gateway; do
-            kubectl kustomize "kubernetes/overlays/$o" | ./kubeconform -strict -summary \
+            kubectl kustomize "kubernetes/overlays/$o" > "$o.yaml"
+            ./kubeconform -strict -summary \
               -schema-location default \
-              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              "$o.yaml"
+            # Tudo no namespace monitoring (sem namespace, iria para o "default").
+            yq -o=json -I=0 "$o.yaml" | jq -s -e 'map(select(.kind != "Namespace") | .metadata.namespace == "monitoring") | all'
           done
           # Componente zabbix-8: troca as três imagens do Zabbix para o 8.0.
           mkdir -p kubernetes/overlays/ci-zabbix-8
@@ -84,7 +88,20 @@ jobs:
           kubectl kustomize kubernetes/overlays/ci-zabbix-8 > zabbix-8.yaml
           ./kubeconform -strict -summary zabbix-8.yaml
           test "$(grep -c 'image: zabbix/.*:alpine-8\.0\.' zabbix-8.yaml)" = 4
-          ! grep -q 'image: zabbix/.*7\.0' zabbix-8.yaml
+          if grep -q 'image: zabbix/.*7\.0' zabbix-8.yaml; then echo "::error::imagem do Zabbix 7.0 no componente zabbix-8"; exit 1; fi
+          # Componente mcp: tudo no namespace monitoring, imagens com versão,
+          # Service só ClusterIP e RBAC só de leitura no namespace.
+          mkdir -p kubernetes/overlays/ci-mcp
+          printf 'namespace: monitoring\nresources: [../local]\ncomponents: [../../components/zabbix-8, ../../components/mcp]\n' \
+            > kubernetes/overlays/ci-mcp/kustomization.yaml
+          kubectl kustomize kubernetes/overlays/ci-mcp > mcp.yaml
+          ./kubeconform -strict -summary mcp.yaml
+          yq -o=json -I=0 mcp.yaml | jq -s -e '
+            (map(select(.kind != "Namespace") | .metadata.namespace == "monitoring") | all)
+            and (map(select(.kind == "Service" and .metadata.name == "mcp")) | length == 1 and .[0].spec.type == null)
+            and (map(select(.kind == "RoleBinding")) | length == 1 and .[0].roleRef.kind == "ClusterRole" and .[0].roleRef.name == "view")
+            and (map(select(.kind == "ClusterRole" or .kind == "ClusterRoleBinding")) | length == 0)
+            and (map(select(.kind == "Deployment" and .metadata.name == "mcp") | .spec.template.spec | (.initContainers + .containers)[] | .image | test(":")) | length == 5 and all)'
 
   # Os scripts e o Makefile rodam no Mac do usuário, que tem ferramentas BSD
   # (sed, grep, awk, tr, stat), bash 3.2 como /bin/sh e GNU make 3.81.

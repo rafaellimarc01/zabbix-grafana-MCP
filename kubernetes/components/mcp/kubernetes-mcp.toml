@@ -1,0 +1,19 @@
+# kubernetes-mcp-server (containers/kubernetes-mcp-server), só dentro do pod.
+port = "8080"
+bind_address = "127.0.0.1"
+stateless = true
+# Só ferramentas de leitura (pods, logs, eventos, recursos genéricos).
+read_only = true
+toolsets = ["core"]
+# Sempre a ServiceAccount "mcp" do pod (papel "view" só neste namespace),
+# nunca um token vindo de quem chama.
+cluster_auth_mode = "kubeconfig"
+cluster_provider_strategy = "in-cluster"
+list_output = "table"
+max_result_bytes = 1048576
+
+# O papel "view" já não lê Secrets; isto é uma segunda trava.
+[[denied_resources]]
+group = ""
+version = "v1"
+kind = "Secret"

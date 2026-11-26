@@ -7,6 +7,9 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import os
+import tempfile
+
 import gateway
 
 TOKEN = "t" * 40
@@ -22,7 +25,8 @@ def fake_upstream(tools, token, sse=False):
 
         def do_POST(self):
             msg = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if self.headers.get("Authorization") != "Bearer " + token:
+            expected = None if token is None else "Bearer " + token
+            if self.headers.get("Authorization") != expected:
                 self.send_response(401)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -82,7 +86,16 @@ class GatewayTest(unittest.TestCase):
             [{"name": "search_dashboards", "inputSchema": {"type": "object"}, "annotations": {"title": "x"}}, {"name": "boom", "inputSchema": {"type": "object"}}],
             "gtok",
         )
-        ups = gateway.build_upstreams({"ZABBIX_MCP_URL": zurl, "ZABBIX_MCP_TOKEN": "ztok", "GRAFANA_MCP_URL": gurl, "GRAFANA_MCP_TOKEN": "gtok"})
+        cls.k, kurl, cls.kstate = fake_upstream([{"name": "pods_list", "inputSchema": {"type": "object"}}], None)
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.gfile = os.path.join(cls.tmp.name, "grafana-token")
+        with open(cls.gfile, "w") as f:
+            f.write("gtok\n")
+        ups = gateway.build_upstreams({
+            "ZABBIX_MCP_URL": zurl, "ZABBIX_MCP_TOKEN": "ztok",
+            "GRAFANA_MCP_URL": gurl, "GRAFANA_MCP_TOKEN_FILE": cls.gfile,
+            "KUBERNETES_MCP_URL": kurl,
+        })
         gateway.Handler.gateway = gateway.Gateway(ups)
         gateway.Handler.token = TOKEN
         gateway.Handler.allowed_hosts = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -92,8 +105,9 @@ class GatewayTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        for s in (cls.srv, cls.z, cls.g):
+        for s in (cls.srv, cls.z, cls.g, cls.k):
             s.shutdown()
+        cls.tmp.cleanup()
 
     def post(self, body, token=TOKEN, headers=None):
         h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
@@ -134,7 +148,7 @@ class GatewayTest(unittest.TestCase):
     def test_lista_com_prefixos(self):
         _, r = self.post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         names = sorted(t["name"] for t in r["result"]["tools"])
-        self.assertEqual(names, ["grafana_boom", "grafana_search_dashboards", "zabbix_host_get"])
+        self.assertEqual(names, ["grafana_boom", "grafana_search_dashboards", "k8s_pods_list", "zabbix_host_get"])
         for t in r["result"]["tools"]:
             self.assertTrue(t["annotations"]["readOnlyHint"])
 
@@ -163,6 +177,19 @@ class GatewayTest(unittest.TestCase):
         _, r = self.post({"jsonrpc": "2.0", "id": 9, "method": "resources/list"})
         self.assertEqual(r["error"]["code"], -32601)
         self.assertEqual(self.post([{"jsonrpc": "2.0", "id": 1, "method": "ping"}])[0], 400)
+
+    def test_kubernetes_sem_token(self):
+        _, r = self.post({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {"name": "k8s_pods_list", "arguments": {}}})
+        self.assertEqual(r["result"]["content"][0]["text"], "ok pods_list")
+
+    def test_token_em_arquivo_vazio_desliga(self):
+        up = gateway.Upstream("grafana", "http://127.0.0.1:1/mcp", token_file=self.gfile)
+        self.assertTrue(up.enabled())
+        empty = os.path.join(self.tmp.name, "vazio")
+        open(empty, "w").close()
+        up = gateway.Upstream("zabbix", "http://127.0.0.1:1/mcp", token_file=empty)
+        self.assertFalse(up.enabled())
+        self.assertEqual(gateway.build_upstreams({"ZABBIX_MCP_URL": "http://x/mcp"}), [])
 
     def test_host_name(self):
         self.assertEqual(gateway.host_name("localhost:8765"), "localhost")

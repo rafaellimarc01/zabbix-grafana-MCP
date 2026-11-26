@@ -1,0 +1,257 @@
+# ServiceAccount do MCP de Kubernetes: só leitura (papel "view", que não lê
+# Secrets) e só neste namespace. O token dela só é montado no container
+# kubernetes-mcp.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp
+  labels:
+    app.kubernetes.io/name: mcp
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-view
+  labels:
+    app.kubernetes.io/name: mcp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: mcp
+---
+# Só ClusterIP: para usar fora do cluster, "make k8s-mcp" (port-forward).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp
+  labels:
+    app.kubernetes.io/name: mcp
+spec:
+  selector:
+    app.kubernetes.io/name: mcp
+  ports:
+    - name: mcp
+      port: 8765
+      targetPort: mcp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp
+  labels:
+    app.kubernetes.io/name: mcp
+spec:
+  # Uma réplica: cada pod cria tokens novos no Zabbix e no Grafana ao subir.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp
+    spec:
+      serviceAccountName: mcp
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # Cria o usuário/token do Zabbix e a service account/token do Grafana
+      # (tokens novos a cada start do pod, guardados só no volume "tokens").
+      initContainers:
+        - name: mcp-init
+          image: zabbix/zabbix-web-nginx-pgsql
+          command: ["/bin/sh", "/files/mcp-k8s-init.sh"]
+          securityContext:
+            runAsUser: 1997
+            runAsGroup: 1995
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          env:
+            - name: ZABBIX_URL
+              value: http://zabbix-web:8080
+            - name: ZABBIX_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: ZABBIX_ADMIN_PASSWORD}
+            - name: GRAFANA_URL
+              value: http://grafana:3000
+            - name: GRAFANA_ADMIN_USER
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_ADMIN_USER}
+            - name: GRAFANA_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: GRAFANA_ADMIN_PASSWORD}
+            - name: OUT
+              value: /run/mcp
+          volumeMounts:
+            - {name: files, mountPath: /files}
+            - {name: tokens, mountPath: /run/mcp}
+      containers:
+        # O único container que recebe conexões de fora do pod.
+        - name: gateway
+          image: python
+          command: ["python", "/files/gateway.py"]
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: mcp
+              containerPort: 8765
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: MCP_TOKEN
+              valueFrom:
+                secretKeyRef: {name: zabbix-secrets, key: MCP_PASSWORD}
+            # Nomes aceitos no cabeçalho Host: o port-forward chega como localhost.
+            - name: MCP_ALLOWED_HOSTS
+              value: localhost,127.0.0.1,::1,mcp
+            - name: ZABBIX_MCP_URL
+              value: http://127.0.0.1:8443/mcp
+            - name: ZABBIX_MCP_TOKEN_FILE
+              value: /run/mcp/zabbix-token
+            - name: GRAFANA_MCP_URL
+              value: http://127.0.0.1:8000/mcp
+            - name: GRAFANA_MCP_TOKEN_FILE
+              value: /run/mcp/grafana-client-token
+            - name: KUBERNETES_MCP_URL
+              value: http://127.0.0.1:8080/mcp
+          readinessProbe:
+            httpGet: {path: /healthz, port: mcp}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: mcp}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          volumeMounts:
+            - {name: files, mountPath: /files}
+            - {name: tokens, mountPath: /run/mcp, readOnly: true}
+        # MCP oficial do Zabbix: só ferramentas de leitura (*_get), sem as que
+        # devolvem chaves de itens, macros, interfaces e histórico bruto. Só
+        # aceita conexões do próprio pod (ZBX_ALLOWEDIP).
+        - name: zabbix-mcp
+          image: zabbix/zabbix-mcp-server
+          securityContext:
+            runAsUser: 1997
+            runAsGroup: 1995
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: ZBX_FRONTEND_URL
+              value: http://zabbix-web:8080/api_jsonrpc.php
+            - name: ZBX_ALLOWEDIP
+              value: 127.0.0.1,::1
+            - {name: ZBX_DENYTOOL_0, value: item_get}
+            - {name: ZBX_DENYTOOL_1, value: lld_get}
+            - {name: ZBX_DENYTOOL_2, value: interface_get}
+            - {name: ZBX_DENYTOOL_3, value: macro_get}
+            - {name: ZBX_DENYTOOL_4, value: history_get}
+            - {name: ZBX_ALLOWTOOL_REGEXP_5, value: _get$}
+            - {name: ZBX_DENYTOOL_6, value: "*"}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+        # MCP oficial do Grafana, só leitura e só em 127.0.0.1, com a service
+        # account "mcp" (Viewer). Os tokens vêm do mcp-init.
+        - name: grafana-mcp
+          image: grafana/mcp-grafana
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              GRAFANA_SERVICE_ACCOUNT_TOKEN=$(cat /run/mcp/grafana-sa-token)
+              MCP_GRAFANA_SERVER_TOKEN=$(cat /run/mcp/grafana-client-token)
+              export GRAFANA_SERVICE_ACCOUNT_TOKEN MCP_GRAFANA_SERVER_TOKEN
+              exec /app/mcp-grafana --transport=streamable-http --address=127.0.0.1:8000 \
+                --disable-write \
+                --enabled-tools=search,datasource,dashboard,alerting,annotations,navigation,runpanelquery \
+                --allowed-hosts=127.0.0.1:8000,localhost:8000
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: GRAFANA_URL
+              value: http://grafana:3000
+            - name: GRAFANA_ORG_ID
+              value: "1"
+            - name: DO_NOT_TRACK
+              value: "1"
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: tokens, mountPath: /run/mcp, readOnly: true}
+        # MCP de Kubernetes (containers/kubernetes-mcp-server): só leitura, só
+        # em 127.0.0.1, com a ServiceAccount "mcp" (veja kubernetes-mcp.toml).
+        - name: kubernetes-mcp
+          image: quay.io/containers/kubernetes_mcp_server
+          args: ["--config", "/files/kubernetes-mcp.toml"]
+          securityContext:
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: files, mountPath: /files}
+            - name: kube-api-access
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+      volumes:
+        - name: files
+          configMap:
+            name: mcp-files
+        - name: tokens
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+        # O mesmo que o Kubernetes monta sozinho, mas só neste container.
+        - name: kube-api-access
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - {key: ca.crt, path: ca.crt}
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef: {fieldPath: metadata.namespace}

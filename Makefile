@@ -2,7 +2,7 @@
 .DEFAULT_GOAL := help
 K8S_OVERLAY ?= local
 
-.PHONY: help env check-env up down logs ps reset backup backup-list upgrade-8 mcp mcp-config k8s-secrets k8s-render k8s-apply k8s-delete sync-k8s validate
+.PHONY: help env check-env up down logs ps reset backup backup-list upgrade-8 mcp mcp-config k8s-secrets k8s-render k8s-apply k8s-delete k8s-mcp k8s-mcp-config sync-k8s validate
 
 help: ## Mostra esta ajuda
 	@# Regex sem "*?" (não guloso), que o grep/awk do macOS (BSD) não aceitam.
@@ -56,6 +56,12 @@ k8s-apply: k8s-secrets ## Aplica no cluster atual (K8S_OVERLAY=local|gateway|ing
 
 k8s-delete: ## Remove do cluster (os PVCs do PostgreSQL ficam)
 	kubectl delete -k kubernetes/overlays/$(K8S_OVERLAY)
+
+k8s-mcp: ## Liga o MCP do Kubernetes em 127.0.0.1:8765 (port-forward; deixe rodando)
+	kubectl -n monitoring port-forward --address 127.0.0.1 svc/mcp 8765:8765
+
+k8s-mcp-config: ## Mostra como conectar o Claude e outras IAs ao MCP do Kubernetes
+	@./scripts/mcp-setup.sh k8s-config
 
 sync-k8s: ## Copia grafana/ e os scripts para kubernetes/base/files
 	./scripts/sync-k8s-files.sh
