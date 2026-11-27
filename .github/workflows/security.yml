@@ -90,8 +90,10 @@ jobs:
       - name: Renderiza os overlays
         run: |
           ./scripts/generate-secrets.sh k8s
+          ./scripts/generate-secrets.sh k8s staging
+          ./scripts/generate-secrets.sh k8s production
           mkdir -p rendered
-          for o in local ingress gateway; do
+          for o in local ingress gateway staging production; do
             kubectl kustomize "kubernetes/overlays/$o" > "rendered/$o.yaml"
           done
           # Componentes opcionais (Zabbix 8.0 e MCP) sobre o overlay local.

@@ -123,6 +123,20 @@ ingress-nginx was retired in March 2026 and no longer gets security fixes, so th
 
 Everything goes into the `monitoring` namespace. The default Admin password is replaced by an init container of `zabbix-web`; the rest of the setup runs as an init container of Grafana on every pod start, so `kubectl apply -k` can be repeated safely. `kubernetes/base/files/` holds a copy of `grafana/` and the scripts because Kustomize cannot read files outside its folder; run `./scripts/sync-k8s-files.sh` after changing them.
 
+## Staging and production environments
+
+Two ready-made environments let you try changes in **staging** before **production**. Each one gets its own passwords, and its name shows in the Zabbix title (`Zabbix (staging)` / `Zabbix (produção)`).
+
+```bash
+# Docker Compose: one machine (or folder) per environment
+make env DEPLOY_ENV=staging      # or production; then make up as usual
+# Kubernetes: overlays on top of "gateway" (HTTPS via Gateway API)
+make k8s-apply K8S_OVERLAY=staging      # namespace monitoring-staging
+make k8s-apply K8S_OVERLAY=production   # namespace monitoring
+```
+
+Staging uses ports 8081/3001/10052, smaller memory limits and keeps 3 days of backups. Production adds memory limits, PostgreSQL tuning, a bigger Zabbix cache, 30 days of backups and, on Kubernetes, 2 Zabbix web replicas with a PodDisruptionBudget. Settings live in `environments/<env>/` (Compose) and `kubernetes/overlays/<env>/` (domains in `kustomization.yaml`, `GRAFANA_ROOT_URL` in `settings.env`). See the Portuguese README for details.
+
 ## Database backups
 
 The Zabbix database is backed up automatically with `pg_dump`: the `postgres-backup` Compose service runs at startup and daily at `BACKUP_TIME` (default `02:00`, keeping `BACKUP_KEEP_DAYS=7`) into the `postgres-backups` volume; on Kubernetes a CronJob does the same into the `postgres-backups` PVC. Run `make backup` for an on-demand backup. Restore steps (all platforms) are in the Portuguese README, section "Backup do banco".

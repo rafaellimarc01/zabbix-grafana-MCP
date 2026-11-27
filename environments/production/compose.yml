@@ -1,0 +1,66 @@
+# Ajustes do ambiente de PRODUÇÃO sobre o docker-compose.yml.
+# Não use direto: o .env gerado por "make env DEPLOY_ENV=production" já aponta
+# o COMPOSE_FILE para cá, então "docker compose ..." e os comandos do make usam
+# este arquivo sozinhos.
+#
+# Pensado para um servidor com 4 GB de RAM ou mais. Os limites evitam que um
+# serviço sozinho derrube a máquina; ajuste ao tamanho do seu ambiente.
+
+services:
+  postgres:
+    # Memória do PostgreSQL para um servidor de 4 GB (o padrão da imagem é
+    # pensado para máquinas mínimas).
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - max_wal_size=2GB
+    # Memória compartilhada para consultas paralelas (o padrão do Docker é 64 MB).
+    shm_size: 256m
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  postgres-backup:
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  zabbix-server:
+    environment:
+      ZBX_CACHESIZE: 256M
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  zabbix-web:
+    environment:
+      ZBX_SERVER_NAME: Zabbix (produção)
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  zabbix-agent:
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  grafana:
+    environment:
+      GF_LOG_LEVEL: warn
+    deploy:
+      resources:
+        limits:
+          memory: 1g

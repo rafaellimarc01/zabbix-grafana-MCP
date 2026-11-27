@@ -1,0 +1,186 @@
+# Ambiente de PRODUÇÃO: o overlay "gateway" (HTTPS pela Gateway API) no
+# namespace monitoring, com senhas próprias, mais memória para o banco e o
+# Zabbix, 2 réplicas do Zabbix web e 30 dias de backups.
+#
+# Antes de aplicar:
+#  1. make k8s-secrets K8S_OVERLAY=production   (gera o secrets.env desta pasta)
+#  2. Troque os domínios abaixo e em settings.env (GRAFANA_ROOT_URL).
+#  3. gatewayClassName e certificado: veja kubernetes/overlays/gateway/gateway.yaml
+#  4. Tamanho dos discos: veja o patch comentado no fim (só na primeira instalação).
+# Aplicar: make k8s-apply K8S_OVERLAY=production
+#
+# Os recursos abaixo servem para algumas centenas de hosts. Para mais, aumente
+# a memória do postgres e do zabbix-server juntos.
+#
+# Prefere Ingress? Troque "../gateway" por "../ingress" e os patches de
+# Gateway/HTTPRoute por um patch nos hosts do Ingress.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring
+
+resources:
+  - ../gateway
+  - pdb.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/environment: production
+    includeSelectors: false
+
+# Senhas próprias de produção (nunca as mesmas de staging).
+secretGenerator:
+  - name: zabbix-secrets
+    behavior: replace
+    envs:
+      - secrets.env
+
+patches:
+  # Domínios de produção.
+  - target: {kind: Gateway, name: zabbix-grafana}
+    patch: |-
+      - op: replace
+        path: /spec/listeners/1/hostname
+        value: zabbix.example.com
+      - op: replace
+        path: /spec/listeners/2/hostname
+        value: grafana.example.com
+  - target: {kind: HTTPRoute, name: zabbix-web}
+    patch: |-
+      - op: replace
+        path: /spec/hostnames
+        value: [zabbix.example.com]
+  - target: {kind: HTTPRoute, name: grafana}
+    patch: |-
+      - op: replace
+        path: /spec/hostnames
+        value: [grafana.example.com]
+
+  # PostgreSQL: mais memória, ajustada para o limite de 4 Gi.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: postgres
+      spec:
+        template:
+          spec:
+            containers:
+              - name: postgres
+                args:
+                  - postgres
+                  - -c
+                  - shared_buffers=1GB
+                  - -c
+                  - effective_cache_size=3GB
+                  - -c
+                  - maintenance_work_mem=256MB
+                  - -c
+                  - work_mem=8MB
+                  - -c
+                  - max_wal_size=2GB
+                resources:
+                  requests: {cpu: 500m, memory: 1Gi}
+                  limits: {memory: 4Gi}
+                volumeMounts:
+                  - name: shm
+                    mountPath: /dev/shm
+            volumes:
+              # Memória compartilhada para consultas paralelas.
+              - name: shm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 512Mi
+
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: zabbix-server
+      spec:
+        template:
+          spec:
+            containers:
+              - name: zabbix-server
+                env:
+                  - name: ZBX_CACHESIZE
+                    value: 256M
+                resources:
+                  requests: {cpu: 250m, memory: 512Mi}
+                  limits: {memory: 2Gi}
+
+  # Zabbix web: 2 réplicas, de preferência em nós diferentes (veja pdb.yaml).
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: zabbix-web
+      spec:
+        replicas: 2
+        template:
+          spec:
+            topologySpreadConstraints:
+              - maxSkew: 1
+                topologyKey: kubernetes.io/hostname
+                whenUnsatisfiable: ScheduleAnyway
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: zabbix-web
+            containers:
+              - name: zabbix-web
+                env:
+                  - name: ZBX_SERVER_NAME
+                    value: Zabbix (produção)
+                resources:
+                  requests: {cpu: 100m, memory: 256Mi}
+                  limits: {memory: 512Mi}
+
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: grafana
+      spec:
+        template:
+          spec:
+            containers:
+              - name: grafana
+                env:
+                  - name: GF_LOG_LEVEL
+                    value: warn
+                resources:
+                  requests: {cpu: 100m, memory: 256Mi}
+                  limits: {memory: 1Gi}
+
+  # Produção guarda um mês de backups. Copie-os também para fora do cluster.
+  - patch: |-
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: postgres-backup
+      spec:
+        jobTemplate:
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: postgres-backup
+                    env:
+                      - name: BACKUP_KEEP_DAYS
+                        value: "30"
+
+  # Tamanho dos discos (o padrão é 10 Gi para o banco e para os backups).
+  # Só funciona na PRIMEIRA instalação: depois, o Kubernetes não deixa mudar o
+  # volumeClaimTemplates do StatefulSet, e aumentar um PVC existente exige uma
+  # StorageClass com allowVolumeExpansion (kubectl -n monitoring edit pvc ...).
+  # Para usar, descomente:
+  # - target: {kind: StatefulSet, name: postgres}
+  #   patch: |-
+  #     - op: replace
+  #       path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+  #       value: 50Gi
+  # - target: {kind: PersistentVolumeClaim, name: postgres-backups}
+  #   patch: |-
+  #     - op: replace
+  #       path: /spec/resources/requests/storage
+  #       value: 100Gi

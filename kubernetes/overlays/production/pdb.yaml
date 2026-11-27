@@ -1,0 +1,11 @@
+# Com 2 réplicas do Zabbix web, a manutenção de um nó (kubectl drain) nunca
+# derruba as duas ao mesmo tempo.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zabbix-web
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zabbix-web

@@ -1,0 +1,85 @@
+# Ambiente de STAGING: o overlay "gateway" (HTTPS pela Gateway API) no
+# namespace monitoring-staging, com senhas próprias e o nome "Zabbix (staging)"
+# no Zabbix, para testar mudanças antes de produção.
+#
+# Antes de aplicar:
+#  1. make k8s-secrets K8S_OVERLAY=staging   (gera o secrets.env desta pasta)
+#  2. Troque os domínios abaixo e em settings.env (GRAFANA_ROOT_URL).
+#  3. gatewayClassName e certificado: veja kubernetes/overlays/gateway/gateway.yaml
+#     (o Secret zabbix-grafana-tls vai no namespace monitoring-staging).
+# Aplicar: make k8s-apply K8S_OVERLAY=staging
+#
+# Prefere Ingress? Troque "../gateway" por "../ingress" e os patches de
+# Gateway/HTTPRoute por um patch nos hosts do Ingress.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: monitoring-staging
+
+resources:
+  - ../gateway
+
+labels:
+  - pairs:
+      app.kubernetes.io/environment: staging
+    includeSelectors: false
+
+# Senhas próprias de staging (nunca as mesmas de produção).
+secretGenerator:
+  - name: zabbix-secrets
+    behavior: replace
+    envs:
+      - secrets.env
+
+patches:
+  # Domínios de staging.
+  - target: {kind: Gateway, name: zabbix-grafana}
+    patch: |-
+      - op: replace
+        path: /spec/listeners/1/hostname
+        value: zabbix.staging.example.com
+      - op: replace
+        path: /spec/listeners/2/hostname
+        value: grafana.staging.example.com
+  - target: {kind: HTTPRoute, name: zabbix-web}
+    patch: |-
+      - op: replace
+        path: /spec/hostnames
+        value: [zabbix.staging.example.com]
+  - target: {kind: HTTPRoute, name: grafana}
+    patch: |-
+      - op: replace
+        path: /spec/hostnames
+        value: [grafana.staging.example.com]
+
+  # Aparece no título e no topo do Zabbix: ninguém confunde com produção.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: zabbix-web
+      spec:
+        template:
+          spec:
+            containers:
+              - name: zabbix-web
+                env:
+                  - name: ZBX_SERVER_NAME
+                    value: Zabbix (staging)
+
+  # Staging guarda menos backups.
+  - patch: |-
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: postgres-backup
+      spec:
+        jobTemplate:
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: postgres-backup
+                    env:
+                      - name: BACKUP_KEEP_DAYS
+                        value: "3"

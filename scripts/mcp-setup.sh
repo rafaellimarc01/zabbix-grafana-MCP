@@ -33,8 +33,8 @@ MODE=${1:-setup}
 if [ "$MODE" = k8s-config ]; then
   # No Kubernetes o token das IAs é o MCP_PASSWORD do secrets.env e o acesso é
   # pelo port-forward do make k8s-mcp (127.0.0.1:8765).
-  ENV_FILE=kubernetes/base/secrets.env
-  [ -f "$ENV_FILE" ] || die "não achei o $ENV_FILE; rode make k8s-secrets"
+  ENV_FILE=${K8S_SECRETS:-kubernetes/base/secrets.env}
+  [ -f "$ENV_FILE" ] || die "não achei o $ENV_FILE; rode make k8s-secrets (com o K8S_OVERLAY do ambiente)"
   MCP_TOKEN=$(sed -n 's/^MCP_PASSWORD=//p' "$ENV_FILE" | tail -n 1)
   [ -n "$MCP_TOKEN" ] || die "MCP_PASSWORD vazio no $ENV_FILE (veja \"MCP no Kubernetes\" no README)"
   load_env() { :; }
