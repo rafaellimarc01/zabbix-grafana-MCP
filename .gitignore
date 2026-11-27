@@ -4,6 +4,9 @@
 !.env.example
 *.env
 !kubernetes/base/secrets.env.example
+# Configurações (sem senhas) de cada ambiente
+!environments/*/compose.env
+!kubernetes/overlays/*/settings.env
 kubernetes/base/secrets.env
 *.pem
 *.key

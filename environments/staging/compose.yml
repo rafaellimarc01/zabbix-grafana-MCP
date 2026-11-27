@@ -1,0 +1,50 @@
+# Ajustes do ambiente de STAGING sobre o docker-compose.yml.
+# Não use direto: o .env gerado por "make env DEPLOY_ENV=staging" já aponta o
+# COMPOSE_FILE para cá, então "docker compose ..." e os comandos do make usam
+# este arquivo sozinhos.
+#
+# Staging é para testar mudanças (versões, templates, alertas) antes de
+# produção, com menos memória.
+
+x-limits: &limits-small
+  deploy:
+    resources:
+      limits:
+        memory: 256m
+
+services:
+  postgres:
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  postgres-backup:
+    <<: *limits-small
+
+  zabbix-server:
+    environment:
+      ZBX_CACHESIZE: 64M
+      ZBX_STARTPOLLERS: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  zabbix-web:
+    environment:
+      # Aparece no título e no topo do Zabbix: ninguém confunde com produção.
+      ZBX_SERVER_NAME: Zabbix (staging)
+    <<: *limits-small
+
+  zabbix-agent:
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  grafana:
+    deploy:
+      resources:
+        limits:
+          memory: 512m

@@ -43,6 +43,9 @@ Alertas incluídos (pasta **Zabbix** em **Alerting → Alert rules**): host indi
 .
 ├── docker-compose.yml          # ambiente completo com Docker
 ├── .env.example                # variáveis (as senhas são geradas por make env)
+├── environments/
+│   ├── staging/                # ajustes do Docker Compose para staging
+│   └── production/             # ajustes do Docker Compose para produção
 ├── grafana/
 │   ├── provisioning/           # plugin, datasource, dashboards e regras de alerta
 │   ├── alerting-examples/      # notificação por e-mail ou Telegram (ative um)
@@ -55,7 +58,9 @@ Alertas incluídos (pasta **Zabbix** em **Alerting → Alert rules**): host indi
 │   └── overlays/
 │       ├── local/              # NodePort, para kind/minikube/k3d/Docker Desktop
 │       ├── gateway/            # Gateway API com HTTPS (recomendado)
-│       └── ingress/            # Ingress com HTTPS (Traefik por padrão)
+│       ├── ingress/            # Ingress com HTTPS (Traefik por padrão)
+│       ├── staging/            # ambiente de staging (gateway + ajustes)
+│       └── production/         # ambiente de produção (gateway + ajustes)
 ├── mcp-gateway/                # MCP único para as IAs (Python, só biblioteca padrão)
 ├── scripts/
 │   ├── zabbix-init.sh          # configuração inicial via API do Zabbix
@@ -309,6 +314,64 @@ Observações:
 - A senha padrão do Admin é trocada no banco por um init container do `zabbix-web`, antes de a interface subir. O resto da configuração (usuário `grafana` e agente) roda num init container do Grafana a cada start do pod, então `kubectl apply -k` pode ser repetido quantas vezes quiser. Para rodar de novo sem mudar nada: `kubectl -n monitoring rollout restart deploy/grafana`.
 - O Kustomize não lê arquivos fora da própria pasta, então `kubernetes/base/files/` tem uma cópia de `grafana/` e dos scripts. Depois de mudar algo neles, rode `./scripts/sync-k8s-files.sh` (o CI acusa se esquecer).
 - Para remover: `kubectl delete -k kubernetes/overlays/local`. Os PVCs do PostgreSQL ficam; apague-os à mão se quiser zerar os dados.
+
+## Ambientes de staging e produção
+
+O modelo traz dois ambientes prontos, para testar mudanças (versões, templates, alertas, dashboards) em **staging** antes de levar para **produção**. Cada ambiente tem senhas próprias e o nome dele aparece no título do Zabbix (`Zabbix (staging)` ou `Zabbix (produção)`), para ninguém confundir as abas.
+
+| | Padrão | Staging | Produção |
+|---|---|---|---|
+| Para quê | Laboratório, primeiro contato | Testar mudanças antes de produção | O monitoramento de verdade |
+| Portas no Docker (web, Grafana, trapper) | 8080, 3000, 10051 | 8081, 3001, 10052 | 8080, 3000, 10051 |
+| Limite de memória no Docker | sem limite | banco 1 GB, Zabbix server e Grafana 512 MB | banco 2 GB, Zabbix server e Grafana 1 GB |
+| PostgreSQL | padrão da imagem | padrão da imagem | ajustado (`shared_buffers` 512 MB no Docker, 1 GB no Kubernetes) |
+| Cache do Zabbix server | 128 MB | 64 MB no Docker, 128 MB no Kubernetes | 256 MB |
+| Backups guardados | 7 dias | 3 dias | 30 dias |
+| Kubernetes: namespace | `monitoring` | `monitoring-staging` | `monitoring` |
+| Kubernetes: acesso | conforme o overlay | Gateway API com HTTPS | Gateway API com HTTPS, 2 réplicas do Zabbix web |
+
+### Docker Compose
+
+Cada ambiente roda numa máquina (ou pasta) própria. O `make env` com `DEPLOY_ENV` gera um `.env` que já aponta o Docker Compose para os ajustes do ambiente (`COMPOSE_FILE`), então todos os outros comandos (`make up`, `make backup`, `make mcp`, `docker compose ...`) continuam iguais:
+
+```bash
+# No servidor de staging
+make env DEPLOY_ENV=staging
+make up
+
+# No servidor de produção
+make env DEPLOY_ENV=production
+make up
+```
+
+- Os ajustes ficam em `environments/<ambiente>/compose.yml` (limites, banco, nome do Zabbix) e `environments/<ambiente>/compose.env` (portas, retenção, endereço do Grafana). Mude à vontade; o `.env` só pega o `compose.env` na hora de ser criado.
+- Staging e produção cabem na mesma máquina: clone o repositório em duas pastas e rode um ambiente em cada. Os nomes dos containers, redes e volumes não se misturam (`zabbix-grafana-staging-*` e `zabbix-grafana-*`) e as portas são diferentes.
+- Produção usa o mesmo nome de projeto do ambiente padrão: quem já usa o modelo mantém os dados. Renomeie o `.env` atual (ex.: `mv .env .env.antigo`), gere o novo com `make env DEPLOY_ENV=production`, copie para ele as senhas (`*_PASSWORD`) e os tokens do MCP do arquivo antigo e rode `make up`.
+- Em produção, o Zabbix web e o Grafana continuam só em `127.0.0.1`. Coloque um proxy reverso com HTTPS na frente (Nginx, Caddy, Traefik) e troque `GRAFANA_ROOT_URL` no `.env` pelo endereço público. Copie os backups para fora do servidor (veja [Backup do banco](#backup-do-banco)).
+- No Windows sem WSL: `scripts\generate-secrets.ps1 -Environment staging` (ou `production`).
+
+### Kubernetes
+
+Os overlays `staging` e `production` usam o overlay `gateway` (HTTPS pela Gateway API) com os ajustes de cada ambiente. Cada um tem o próprio `secrets.env`, gerado na pasta do overlay:
+
+```bash
+# 1. Troque os domínios em kubernetes/overlays/<ambiente>/kustomization.yaml e o
+#    GRAFANA_ROOT_URL em kubernetes/overlays/<ambiente>/settings.env.
+#    gatewayClassName e certificado: kubernetes/overlays/gateway/gateway.yaml
+
+# 2. Staging (namespace monitoring-staging)
+make k8s-apply K8S_OVERLAY=staging      # gera kubernetes/overlays/staging/secrets.env e aplica
+
+# 3. Produção (namespace monitoring)
+make k8s-apply K8S_OVERLAY=production   # gera kubernetes/overlays/production/secrets.env e aplica
+```
+
+- Os dois podem ficar no mesmo cluster (namespaces diferentes) ou em clusters diferentes. O Secret do certificado (`zabbix-grafana-tls`) vai no namespace de cada ambiente.
+- Produção sobe 2 réplicas do Zabbix web (com PodDisruptionBudget), mais memória para o PostgreSQL, o Zabbix server e o Grafana, e 30 dias de backups. O PostgreSQL, o Zabbix server e o Grafana continuam com 1 réplica: o banco e o Grafana usam volumes `ReadWriteOnce`, e o Zabbix server não roda dois ativos ao mesmo tempo.
+- **Disco em produção:** o padrão é 10 Gi para o banco e para os backups. Para mais, descomente o patch no fim de `kubernetes/overlays/production/kustomization.yaml` **antes da primeira instalação**; depois disso, só aumentando o PVC (com uma StorageClass que permita `allowVolumeExpansion`).
+- Quem já roda o overlay `gateway` no namespace `monitoring` pode passar para `production`: rode `make k8s-secrets K8S_OVERLAY=production`, copie as senhas de `kubernetes/base/secrets.env` para `kubernetes/overlays/production/secrets.env` e só então `make k8s-apply K8S_OVERLAY=production`.
+- O MCP e o Zabbix 8.0 funcionam igual: acrescente os componentes no `kustomization.yaml` do ambiente. Use `make k8s-mcp K8S_OVERLAY=staging` (ou `production`) para o port-forward no namespace certo.
+- Prefere Ingress? Troque `../gateway` por `../ingress` no overlay do ambiente e os patches de domínio por um patch nos hosts do Ingress.
 
 ## Backup do banco
 
@@ -624,7 +687,7 @@ No Kubernetes, o MCP é o componente opcional `kubernetes/components/mcp`. Ele s
 
 **Como ligar:**
 
-1. As ferramentas do Zabbix precisam do Zabbix 8.0. No `kustomization.yaml` do seu overlay (`local`, `gateway` ou `ingress`), acrescente:
+1. As ferramentas do Zabbix precisam do Zabbix 8.0. No `kustomization.yaml` do seu overlay (`local`, `gateway`, `ingress`, `staging` ou `production`), acrescente:
 
    ```yaml
    components:
@@ -632,7 +695,7 @@ No Kubernetes, o MCP é o componente opcional `kubernetes/components/mcp`. Ele s
      - ../../components/mcp
    ```
 
-2. O token das IAs é o `MCP_PASSWORD` do `kubernetes/base/secrets.env` (o `make k8s-secrets` já cria). Se o seu `secrets.env` é de antes desta versão, acrescente a linha:
+2. O token das IAs é o `MCP_PASSWORD` do `kubernetes/base/secrets.env` (nos ambientes, do `secrets.env` da pasta do overlay; o `make k8s-secrets` já cria). Se o seu `secrets.env` é de antes desta versão, acrescente a linha:
 
    ```bash
    echo "MCP_PASSWORD=$(head -c 512 /dev/urandom | LC_ALL=C tr -dc A-Za-z0-9 | head -c 32)" >> kubernetes/base/secrets.env
@@ -643,6 +706,7 @@ No Kubernetes, o MCP é o componente opcional `kubernetes/components/mcp`. Ele s
    ```bash
    make k8s-mcp          # kubectl port-forward: 127.0.0.1:8765 -> svc/mcp
    make k8s-mcp-config   # mostra os comandos do Claude Code e do Claude Desktop
+   # nos ambientes, acrescente K8S_OVERLAY=staging (ou production) aos dois
    ```
 
 A configuração dos clientes é a mesma do Docker Compose (`http://127.0.0.1:8765/mcp`), só muda o token. Se o MCP do Docker Compose também estiver rodando na mesma máquina, pare um dos dois, porque os dois usam a porta 8765. Para conferir: `kubectl -n monitoring logs deploy/mcp -c mcp-init` e `-c gateway`.

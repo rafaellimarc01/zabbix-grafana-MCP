@@ -4,27 +4,42 @@
 # PowerShell 7 (Windows, macOS e Linux).
 #   powershell -ExecutionPolicy Bypass -File scripts\generate-secrets.ps1          -> .env (Docker Compose)
 #   powershell -ExecutionPolicy Bypass -File scripts\generate-secrets.ps1 -Target k8s -> kubernetes\base\secrets.env
+#   ... generate-secrets.ps1 -Environment production              -> .env do ambiente de produção
+#   ... generate-secrets.ps1 -Target k8s -Environment staging     -> kubernetes\overlays\staging\secrets.env
+# Com -Environment (staging ou production), as configurações do ambiente
+# (environments\<ambiente>\compose.env ou kubernetes\overlays\<ambiente>\settings.env)
+# entram no lugar das do exemplo, e cada ambiente ganha senhas próprias.
 # Nunca sobrescreve um arquivo existente.
 # Este arquivo é salvo em UTF-8 com BOM de propósito: sem o BOM, o Windows
 # PowerShell 5.1 lê o script como ANSI e estraga os acentos das mensagens.
 param(
     [ValidateSet('compose', 'k8s')]
-    [string]$Target = 'compose'
+    [string]$Target = 'compose',
+    [ValidateSet('staging', 'production')]
+    [string]$Environment = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 $root = Split-Path -Parent $PSScriptRoot
 
+$settings = $null
+$settingsName = $null
 if ($Target -eq 'k8s') {
     $src = Join-Path $root 'kubernetes/base/secrets.env.example'
-    $dest = Join-Path $root 'kubernetes/base/secrets.env'
-    $destName = 'kubernetes/base/secrets.env'
+    if ($Environment) {
+        $destName = "kubernetes/overlays/$Environment/secrets.env"
+        $settingsName = "kubernetes/overlays/$Environment/settings.env"
+    } else {
+        $destName = 'kubernetes/base/secrets.env'
+    }
 } else {
     $src = Join-Path $root '.env.example'
-    $dest = Join-Path $root '.env'
     $destName = '.env'
+    if ($Environment) { $settingsName = "environments/$Environment/compose.env" }
 }
+$dest = Join-Path $root $destName
+if ($settingsName) { $settings = Join-Path $root $settingsName }
 
 if (Test-Path -LiteralPath $dest) {
     Write-Output "$destName já existe; nada foi alterado."
@@ -60,8 +75,35 @@ function New-RandomPassword {
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $lines = [System.IO.File]::ReadAllText($src, $utf8) -split "`r?`n"
 if ($lines.Count -gt 0 -and $lines[-1] -eq '') { $lines = $lines[0..($lines.Count - 2)] }
-$out = foreach ($line in $lines) {
-    if ($line -cmatch '^[A-Z][A-Z0-9_]*_PASSWORD=$') { $line + (New-RandomPassword) } else { $line }
+function Read-Lines($path) {
+    $l = [System.IO.File]::ReadAllText($path, $utf8) -split "`r?`n"
+    if ($l.Count -gt 0 -and $l[-1] -eq '') { $l = $l[0..($l.Count - 2)] }
+    return ,$l
+}
+# Configurações do ambiente: VAR -> linha "VAR=valor" (a última vence).
+$over = [ordered]@{}
+if ($settings) {
+    foreach ($line in (Read-Lines $settings)) {
+        if ($line -cmatch '^([A-Z][A-Z0-9_]*)=') { $over[$Matches[1]] = $line }
+    }
+}
+$srcKeys = @{}
+$out = New-Object System.Collections.Generic.List[string]
+foreach ($line in $lines) {
+    if ($line -cmatch '^([A-Z][A-Z0-9_]*)=') { $srcKeys[$Matches[1]] = $true }
+    if ($line -cmatch '^([A-Z][A-Z0-9_]*)=' -and $over.Contains($Matches[1])) {
+        $out.Add($over[$Matches[1]])
+    } elseif ($line -cmatch '^[A-Z][A-Z0-9_]*_PASSWORD=$') {
+        $out.Add($line + (New-RandomPassword))
+    } else {
+        $out.Add($line)
+    }
+}
+# Configurações do ambiente que não existem no exemplo vão no fim.
+if ($settings) {
+    $out.Add('')
+    $out.Add("# ---- Ambiente: $Environment (de $settingsName) ----")
+    foreach ($k in $over.Keys) { if (-not $srcKeys.ContainsKey($k)) { $out.Add($over[$k]) } }
 }
 $tmp = "$dest.tmp"
 [System.IO.File]::WriteAllText($tmp, (($out -join "`n") + "`n"), $utf8)
